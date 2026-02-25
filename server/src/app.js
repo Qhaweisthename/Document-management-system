@@ -3,6 +3,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const authRoutes = require('./routes/authRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
+const approvalRoutes = require('./routes/approvalRoutes');
+const reportRoutes = require('./routes/reportRoutes');
+const insightsRoutes = require('./routes/insightsRoutes');
+const aiExtractionRoutes = require('./routes/aiExtractionRoutes');
+
 
 const app = express();
 
@@ -11,8 +17,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+
+
+
+
+
+
+// Add this after auth routes
+app.use('/api/upload', uploadRoutes)
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/approvals', approvalRoutes);
+// Add after other routes
+app.use('/api/reports', reportRoutes);
+app.use('/api/insights', insightsRoutes);
+app.use('/api/ai-extraction', aiExtractionRoutes);
+
+
 
 // Test route
 app.get('/', (req, res) => {
