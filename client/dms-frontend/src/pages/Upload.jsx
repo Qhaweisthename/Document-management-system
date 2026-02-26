@@ -107,7 +107,7 @@ export default function Upload() {
     return `${prefix}-${year}${month}${day}-${timestamp}${random}`;
   };
 
-  // ============ FIXED: AUTO-EXTRACT DATA ============
+  // ============ FIXED: AUTO-EXTRACT ALL DATA ============
   const extractDataFromFile = async (selectedFile) => {
     setExtracting(true);
     setError('');
@@ -129,44 +129,71 @@ export default function Upload() {
       // Generate invoice number FIRST
       const generatedInvoiceNumber = generateInvoiceNumber();
       
-      // ALWAYS set invoice number - this is guaranteed
+      // ALWAYS set invoice number
       let updatedFormData = {
         invoice_number: generatedInvoiceNumber
       };
       
-      // If extraction succeeded, add those fields
+      // If extraction succeeded, add ALL fields
       if (response.data.success && response.data.data) {
         const extracted = response.data.data;
         console.log('📊 Extracted data:', extracted);
         
         // Format date if found
-        let formattedDate = extracted.date;
+        let formattedDate = '';
         if (extracted.date) {
+          console.log('Raw date from extraction:', extracted.date);
+          
           // Try to parse various date formats
           if (extracted.date.includes('/')) {
             const parts = extracted.date.split('/');
             if (parts.length === 3) {
               if (parts[2].length === 4) {
+                // Format: MM/DD/YYYY or DD/MM/YYYY
                 formattedDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
               } else if (parts[2].length === 2) {
+                // Format: MM/DD/YY or DD/MM/YY
                 formattedDate = `20${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
               }
             }
           } else if (extracted.date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            // Already in YYYY-MM-DD format
             formattedDate = extracted.date;
+          } else if (extracted.date.match(/^\d{2}-\d{2}-\d{4}$/)) {
+            // Format: DD-MM-YYYY
+            const parts = extracted.date.split('-');
+            formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
           }
+          
+          console.log('Formatted date:', formattedDate);
         }
         
-        // Add extracted data to form
+        // Parse amount and vat to ensure they're numbers
+        let amount = extracted.amount;
+        let vat = extracted.vat;
+        
+        // Remove any non-numeric characters except decimal point
+        if (amount) {
+          amount = amount.replace(/[^\d.-]/g, '');
+          console.log('Cleaned amount:', amount);
+        }
+        
+        if (vat) {
+          vat = vat.replace(/[^\d.-]/g, '');
+          console.log('Cleaned vat:', vat);
+        }
+        
+        // Add ALL extracted data to form
         updatedFormData = {
           ...updatedFormData,
           date: formattedDate || '',
-          amount: extracted.amount || '',
-          vat: extracted.vat || '',
+          amount: amount || '',
+          vat: vat || '',
         };
 
         // Try to auto-select vendor
         if (extracted.vendor && vendors.length > 0) {
+          console.log('Looking for vendor:', extracted.vendor);
           const matchedVendor = vendors.find(v => 
             v.name.toLowerCase().includes(extracted.vendor.toLowerCase()) ||
             extracted.vendor.toLowerCase().includes(v.name.toLowerCase())
@@ -176,17 +203,24 @@ export default function Upload() {
             updatedFormData.vendor_id = matchedVendor.id;
             setSuccess(`✨ Vendor auto-selected: ${matchedVendor.name}`);
             setTimeout(() => setSuccess(''), 3000);
+          } else {
+            // Vendor not found, pre-fill new vendor form
+            setNewVendor(prev => ({
+              ...prev,
+              name: extracted.vendor
+            }));
           }
         }
         
-        setSuccess(`✅ AI extracted data and generated invoice #${generatedInvoiceNumber}`);
-        setTimeout(() => setSuccess(''), 3000);
+        setSuccess(`✅ AI extracted: Date: ${formattedDate || 'N/A'}, Amount: $${amount || 'N/A'}, VAT: $${vat || 'N/A'}`);
+        setTimeout(() => setSuccess(''), 4000);
       } else {
         setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated (AI extraction unavailable)`);
         setTimeout(() => setSuccess(''), 3000);
       }
       
-      // Update form with all data at once
+      // Update form with ALL data at once
+      console.log('Updating form with:', updatedFormData);
       setFormData(prev => ({
         ...prev,
         ...updatedFormData
