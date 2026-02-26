@@ -94,8 +94,8 @@ const uploadDocument = async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Check for duplicates before inserting - NOW with user ID
-    const duplicateCheck = await checkForDuplicates(invoice_number, vendor_id, amount, req.user.id);
+    // Check for duplicates by FILENAME only
+    const duplicateCheck = await checkForDuplicates(req.file.originalname, req.user.id);
     
     if (duplicateCheck.isDuplicate) {
       try { fs.unlinkSync(req.file.path); } catch (e) {}
@@ -437,24 +437,23 @@ const getMyUploads = async (req, res) => {
   }
 };
 
-// Check for duplicates - MODIFIED to only check current user's documents
-const checkForDuplicates = async (invoiceNumber, vendorId, amount, userId) => {
+// Check for duplicates - Check by FILENAME only
+const checkForDuplicates = async (filename, userId) => {
   try {
-    // Only check duplicates for the CURRENT user's documents
-    const invoiceMatch = await pool.query(
+    // Check if the SAME filename already exists for this user
+    const fileMatch = await pool.query(
       `SELECT * FROM documents 
-       WHERE invoice_number = $1 
-       AND vendor_id = $2 
-       AND created_by = $3`,  // Only check current user's docs
-      [invoiceNumber, vendorId, userId]
+       WHERE filename = $1 
+       AND created_by = $2`,
+      [filename, userId]
     );
 
-    if (invoiceMatch.rows.length > 0) {
+    if (fileMatch.rows.length > 0) {
       return {
         isDuplicate: true,
-        reason: 'You have already used this invoice number for this vendor',
-        matchType: 'exact',
-        existingDocument: invoiceMatch.rows[0]
+        reason: 'You have already uploaded a file with this name',
+        matchType: 'filename',
+        existingDocument: fileMatch.rows[0]
       };
     }
 
