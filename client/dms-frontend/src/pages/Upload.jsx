@@ -136,7 +136,7 @@ export default function Upload() {
       
       console.log('✅ Extraction preview successful:', response.data);
       
-      // Generate a UNIQUE invoice number - FIXED: using correct function name
+      // Generate a UNIQUE invoice number
       const generatedInvoiceNumber = generateInvoiceNumber();
       
       if (response.data.success && response.data.data) {
@@ -190,7 +190,7 @@ export default function Upload() {
       
     } catch (error) {
       console.error('❌ Extraction preview failed:', error);
-      // Still generate an invoice number even on error - FIXED: using correct function name
+      // Still generate an invoice number even on error
       const generatedInvoiceNumber = generateInvoiceNumber();
       setFormData(prev => ({
         ...prev,
@@ -225,7 +225,7 @@ export default function Upload() {
       setFile(selectedFile);
       setError('');
       
-      // Generate a UNIQUE invoice number - FIXED: using correct function name
+      // Generate a UNIQUE invoice number
       const tempInvoiceNumber = generateInvoiceNumber();
       setFormData(prev => ({
         ...prev,
@@ -355,11 +355,21 @@ export default function Upload() {
         }
       });
       
-      // Show more specific error message
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          error.message || 
-                          'Error uploading document';
+      // Show more specific error message from the server
+      const serverMessage = error.response?.data?.message;
+      const serverError = error.response?.data?.error;
+      const duplicateInfo = error.response?.data?.duplicate;
+      
+      let errorMessage = error.message || 'Error uploading document';
+      
+      if (serverMessage) {
+        errorMessage = serverMessage;
+      } else if (serverError) {
+        errorMessage = serverError;
+      } else if (duplicateInfo) {
+        errorMessage = duplicateInfo.reason || 'Duplicate document detected';
+      }
+      
       setError(errorMessage);
     } finally {
       setUploading(false);
