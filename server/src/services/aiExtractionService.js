@@ -33,23 +33,19 @@ class AIExtractionService {
   }
 
   async extractFromDocument(filePath, documentId) {
-    // If service is disabled, return mock data instead of crashing
+    // If service is disabled, return empty data with success: false
     if (this.disabled) {
-      console.log('⚠️ AI extraction skipped (service disabled), using mock data');
+      console.log('⚠️ AI extraction skipped (service disabled)');
       
-      // Return mock data so the upload still works
       return {
         success: false,
         data: {
-          invoice_number: `MOCK-${Date.now()}`,
-          date: new Date().toISOString().split('T')[0],
-          amount: (Math.random() * 1000).toFixed(2),
-          vat: (Math.random() * 150).toFixed(2),
-          vendor: 'Mock Vendor'
-        },
-        confidence: 0.85,
-        text: 'Mock extraction - AI service disabled',
-        mock: true
+          invoice_number: '',
+          date: '',
+          amount: '',
+          vat: '',
+          vendor: ''
+        }
       };
     }
 
@@ -75,7 +71,9 @@ class AIExtractionService {
       const extractedData = this.parseExtractedText(fullTextAnnotation.text);
       const confidence = this.calculateConfidence(result);
       
-      await this.storeExtractionResults(documentId, extractedData, confidence, fullTextAnnotation);
+      if (documentId) {
+        await this.storeExtractionResults(documentId, extractedData, confidence, fullTextAnnotation);
+      }
 
       return {
         success: true,
@@ -85,35 +83,37 @@ class AIExtractionService {
       };
 
     } catch (error) {
-  console.error('AI Extraction error:', error);
-  
-  // Log failure but DON'T crash
-  try {
-    await pool.query(
-      `INSERT INTO document_logs (document_id, log_type, details) 
-       VALUES ($1, 'extraction_issue', $2)`,
-      [documentId, JSON.stringify({
-        error: error.message,
-        timestamp: new Date()
-      })]
-    );
-  } catch (logError) {
-    console.error('Failed to log extraction error:', logError);
-  }
+      console.error('AI Extraction error:', error);
+      
+      // Log failure but DON'T crash
+      if (documentId) {
+        try {
+          await pool.query(
+            `INSERT INTO document_logs (document_id, log_type, details) 
+             VALUES ($1, 'extraction_issue', $2)`,
+            [documentId, JSON.stringify({
+              error: error.message,
+              timestamp: new Date()
+            })]
+          );
+        } catch (logError) {
+          console.error('Failed to log extraction error:', logError);
+        }
+      }
 
-  // IMPORTANT CHANGE: Return success: false so frontend knows to use defaults
-  return {
-    success: false,  // Changed from true to false
-    data: {
-      invoice_number: '',
-      date: '',
-      amount: '',
-      vat: '',
-      vendor: ''
-    },
-    error: error.message
-  };
-}
+      // Return empty data with success: false
+      return {
+        success: false,
+        data: {
+          invoice_number: '',
+          date: '',
+          amount: '',
+          vat: '',
+          vendor: ''
+        },
+        error: error.message
+      };
+    }
   }
 
   parseExtractedText(text) {
