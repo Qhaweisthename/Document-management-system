@@ -1,11 +1,16 @@
 const pool = require('../config/db');
 
 // Get pending approvals based on user role and step
+// Get pending approvals based on user role and step
 const getPendingApprovals = async (req, res) => {
   try {
     let query = `
       SELECT 
-        a.*,
+        a.id as approval_id,
+        a.step,
+        a.status as approval_status,
+        a.role as required_role,
+        d.id as document_id,
         d.filename,
         d.document_type,
         d.invoice_number,
@@ -15,58 +20,61 @@ const getPendingApprovals = async (req, res) => {
         d.status as document_status,
         v.name as vendor_name,
         u.username as uploaded_by,
-        json_agg(
-          json_build_object(
-            'step', a2.step,
-            'status', a2.status,
-            'comments', a2.comments,
-            'approver_name', u2.username,
-            'created_at', a2.created_at
-          ) ORDER BY a2.step
-        ) FILTER (WHERE a2.id != a.id) as approval_history
+        (
+          SELECT json_agg(
+            json_build_object(
+              'step', a2.step,
+              'status', a2.status,
+              'comments', a2.comments,
+              'approver_name', u2.username,
+              'created_at', a2.created_at
+            ) ORDER BY a2.step
+          )
+          FROM approvals a2
+          LEFT JOIN users u2 ON a2.approver_id = u2.id
+          WHERE a2.document_id = d.id AND a2.id != a.id
+        ) as approval_history
       FROM approvals a
       JOIN documents d ON a.document_id = d.id
       JOIN vendors v ON d.vendor_id = v.id
       JOIN users u ON d.created_by = u.id
-      LEFT JOIN approvals a2 ON d.id = a2.document_id
-      LEFT JOIN users u2 ON a2.approver_id = u2.id
       WHERE a.status = 'pending'
     `;
 
-    // Filter based on user role and step
+    // FIXED: Approvers should see Steps 1 AND 2
     if (req.user.role === 'approver') {
-      // Approvers see step 1 and 2 based on their level
-      // You can customize this logic based on your approver hierarchy
-      query += ` AND a.step = 1`;
+      query += ` AND a.step IN (1, 2)`;
     }
-    // Admin sees all steps
+    // Admin sees all steps (1, 2, and 3)
 
-    query += ` GROUP BY a.id, d.id, v.id, u.id ORDER BY d.created_at DESC`;
+    query += ` ORDER BY 
+        CASE a.step
+          WHEN 1 THEN 1
+          WHEN 2 THEN 2
+          WHEN 3 THEN 3
+        END,
+        d.created_at DESC`;
 
     const result = await pool.query(query);
     
-    // Group by document for easier frontend handling
-    const approvals = {};
-    result.rows.forEach(row => {
-      if (!approvals[row.document_id]) {
-        approvals[row.document_id] = {
-          document_id: row.document_id,
-          filename: row.filename,
-          document_type: row.document_type,
-          invoice_number: row.invoice_number,
-          amount: row.amount,
-          vat: row.vat,
-          date: row.document_date,
-          vendor_name: row.vendor_name,
-          uploaded_by: row.uploaded_by,
-          current_step: row.step,
-          approval_id: row.id,
-          history: row.approval_history || []
-        };
-      }
-    });
+    // Format the response
+    const approvals = result.rows.map(row => ({
+      document_id: row.document_id,
+      approval_id: row.approval_id,
+      filename: row.filename,
+      document_type: row.document_type,
+      invoice_number: row.invoice_number,
+      amount: row.amount,
+      vat: row.vat,
+      date: row.document_date,
+      vendor_name: row.vendor_name,
+      uploaded_by: row.uploaded_by,
+      current_step: row.step,
+      required_role: row.required_role,
+      history: row.approval_history || []
+    }));
 
-    res.json({ approvals: Object.values(approvals) });
+    res.json({ approvals });
   } catch (error) {
     console.error('Error fetching approvals:', error);
     res.status(500).json({ message: 'Error fetching approvals' });
@@ -136,7 +144,7 @@ const processApproval = async (req, res) => {
       }
 
       // Check if user is authorized for this step
-      if (req.user.role === 'approver' && approval.step > 1) {
+      if (req.user.role === 'approver' && approval.step > 2) {
         await client.query('ROLLBACK');
         return res.status(403).json({ message: 'Not authorized for this approval step' });
       }
