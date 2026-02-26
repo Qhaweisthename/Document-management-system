@@ -94,8 +94,8 @@ const uploadDocument = async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Check for duplicates before inserting
-    const duplicateCheck = await checkForDuplicates(invoice_number, vendor_id, amount);
+    // Check for duplicates before inserting - NOW with user ID
+    const duplicateCheck = await checkForDuplicates(invoice_number, vendor_id, amount, req.user.id);
     
     if (duplicateCheck.isDuplicate) {
       try { fs.unlinkSync(req.file.path); } catch (e) {}
@@ -437,47 +437,26 @@ const getMyUploads = async (req, res) => {
   }
 };
 
-// Check for duplicates
-// Check for duplicates - MODIFIED to be less aggressive
-const checkForDuplicates = async (invoiceNumber, vendorId, amount) => {
+// Check for duplicates - MODIFIED to only check current user's documents
+const checkForDuplicates = async (invoiceNumber, vendorId, amount, userId) => {
   try {
-    // Primary check: Exact invoice number match for the SAME vendor
+    // Only check duplicates for the CURRENT user's documents
     const invoiceMatch = await pool.query(
       `SELECT * FROM documents 
-       WHERE invoice_number = $1 AND vendor_id = $2`,
-      [invoiceNumber, vendorId]
+       WHERE invoice_number = $1 
+       AND vendor_id = $2 
+       AND created_by = $3`,  // Only check current user's docs
+      [invoiceNumber, vendorId, userId]
     );
 
     if (invoiceMatch.rows.length > 0) {
       return {
         isDuplicate: true,
-        reason: 'Invoice number already exists for this vendor',
+        reason: 'You have already used this invoice number for this vendor',
         matchType: 'exact',
         existingDocument: invoiceMatch.rows[0]
       };
     }
-
-    // OPTIONAL: Make the secondary check less sensitive or remove it
-    // Comment this out if it's causing false positives
-    /*
-    const tolerance = 0.01;
-    const amountMatch = await pool.query(
-      `SELECT * FROM documents 
-       WHERE vendor_id = $1 
-       AND ABS(amount - $2::numeric) <= $2::numeric * $3
-       AND created_at > NOW() - INTERVAL '30 days'`,
-      [vendorId, amount, tolerance]
-    );
-
-    if (amountMatch.rows.length > 0) {
-      return {
-        isDuplicate: true,
-        reason: 'Similar amount found for this vendor within last 30 days',
-        matchType: 'similar',
-        existingDocument: amountMatch.rows[0]
-      };
-    }
-    */
 
     return { isDuplicate: false };
   } catch (error) {
@@ -798,5 +777,5 @@ module.exports = {
   downloadDocument,
   getDocumentWorkflowStatus,
   deleteDocument,
-  extractPreview  // ← ADDED THIS LINE
+  extractPreview
 };
