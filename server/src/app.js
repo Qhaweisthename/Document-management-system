@@ -22,6 +22,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept']
 }));
 
+// Handle preflight requests for all routes
+app.options('*', cors());
+
 // ============ SIMPLIFIED OPTIONS HANDLER ============
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
@@ -39,15 +42,18 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use('/api/upload', uploadRoutes)
+// ============ ROUTES - ORDER MATTERS! ============
+// Document routes first (most specific)
+app.use('/api/documents', documentRoutes);
+
+// Then other API routes
+app.use('/api/upload', uploadRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/approvals', approvalRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/insights', insightsRoutes);
 app.use('/api/ai-extraction', aiExtractionRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/documents', documentRoutes);
 
 // Test route
 app.get('/', (req, res) => {
@@ -59,6 +65,12 @@ app.get('/', (req, res) => {
         login: 'POST /api/auth/login',
         me: 'GET /api/auth/me',
         changePassword: 'PUT /api/auth/change-password'
+      },
+      documents: {
+        upload: 'POST /api/documents/upload',
+        getAll: 'GET /api/documents/all',
+        download: 'GET /api/documents/download/:id',
+        vendors: 'GET /api/documents/vendors'
       }
     }
   });
@@ -93,7 +105,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
+// 404 handler (this should be LAST)
 app.use((req, res) => {
   res.status(404).json({ message: `Route ${req.method} ${req.url} not found` });
 });
