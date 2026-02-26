@@ -24,6 +24,7 @@ export default function Upload() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [extracting, setExtracting] = useState(false);
   
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -58,7 +59,89 @@ export default function Upload() {
     }
   };
 
-  const handleFileChange = (e) => {
+  // NEW: Extract data from file before upload
+  const extractDataFromFile = async (selectedFile) => {
+    setExtracting(true);
+    setError('');
+    
+    try {
+      console.log('🔍 Attempting to extract data from file before upload...');
+      
+      const extractData = new FormData();
+      extractData.append('document', selectedFile);
+      
+      const response = await api.post('/documents/extract-preview', extractData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      
+      console.log('✅ Extraction preview successful:', response.data);
+      
+      if (response.data.success && response.data.data) {
+        const extracted = response.data.data;
+        
+        // Format date if found
+        let formattedDate = extracted.date;
+        if (extracted.date && extracted.date.includes('/')) {
+          const parts = extracted.date.split('/');
+          if (parts.length === 3) {
+            // Try to format as YYYY-MM-DD for input
+            if (parts[2].length === 4) {
+              formattedDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+            }
+          }
+        }
+        
+        // Auto-fill the form with extracted data
+        setFormData(prev => ({
+          ...prev,
+          invoice_number: extracted.invoice_number || prev.invoice_number,
+          date: formattedDate || prev.date,
+          amount: extracted.amount || prev.amount,
+          vat: extracted.vat || prev.vat,
+        }));
+
+        // Try to auto-select vendor if match found
+        if (extracted.vendor && vendors.length > 0) {
+          const matchedVendor = vendors.find(v => 
+            v.name.toLowerCase().includes(extracted.vendor.toLowerCase()) ||
+            extracted.vendor.toLowerCase().includes(v.name.toLowerCase())
+          );
+          
+          if (matchedVendor) {
+            setFormData(prev => ({
+              ...prev,
+              vendor_id: matchedVendor.id
+            }));
+            setSuccess(`✨ Vendor auto-selected: ${matchedVendor.name}`);
+            setTimeout(() => setSuccess(''), 3000);
+          } else {
+            // Option to create new vendor from extracted name
+            setNewVendor(prev => ({
+              ...prev,
+              name: extracted.vendor
+            }));
+          }
+        }
+        
+        if (extracted.invoice_number || extracted.amount || extracted.date) {
+          setSuccess('✅ Form auto-filled with AI extracted data');
+          setTimeout(() => setSuccess(''), 3000);
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ Extraction preview failed:', error);
+      // Don't show error to user - just let them fill manually
+      // Optional: Show a subtle hint
+      console.log('Manual entry required - AI extraction unavailable');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
       console.log('File selected:', {
@@ -67,6 +150,7 @@ export default function Upload() {
         type: selectedFile.type
       });
       
+      // Validate file
       if (selectedFile.size > 10 * 1024 * 1024) {
         setError('File size must be less than 10MB');
         return;
@@ -80,6 +164,9 @@ export default function Upload() {
       
       setFile(selectedFile);
       setError('');
+      
+      // NEW: Try to extract data and pre-fill form
+      await extractDataFromFile(selectedFile);
     }
   };
 
@@ -232,19 +319,28 @@ export default function Upload() {
               onChange={handleFileChange}
               accept=".pdf,.jpg,.jpeg,.png"
               className="file-input"
+              disabled={extracting}
             />
             <label htmlFor="file-input" className="file-label">
               <span className="file-icon">📄</span>
               <span className="file-text">
-                {file ? file.name : 'Choose a file or drag it here'}
+                {extracting ? '🔍 AI analyzing document...' : (file ? file.name : 'Choose a file or drag it here')}
               </span>
-              <span className="file-info">Max size: 10MB (PDF, JPEG, PNG)</span>
+              <span className="file-info">
+                {extracting ? 'Please wait...' : 'Max size: 10MB (PDF, JPEG, PNG)'}
+              </span>
             </label>
           </div>
+          {extracting && (
+            <div className="extracting-indicator">
+              <div className="extracting-spinner"></div>
+              <span>AI is extracting data from document...</span>
+            </div>
+          )}
         </div>
 
         <div className="form-section">
-          <h3>Document Details</h3>
+          <h3>Document Details {extracting && <span className="badge">✨ AI Auto-filling</span>}</h3>
           
           <div className="form-row">
             <div className="form-group">
@@ -255,6 +351,7 @@ export default function Upload() {
                   value={formData.vendor_id}
                   onChange={handleInputChange}
                   required
+                  disabled={extracting}
                 >
                   <option value="">Select Vendor</option>
                   {vendors.map(vendor => (
@@ -267,6 +364,7 @@ export default function Upload() {
                   type="button" 
                   onClick={() => setShowNewVendor(true)}
                   className="btn-secondary"
+                  disabled={extracting}
                 >
                   + New
                 </button>
@@ -280,6 +378,7 @@ export default function Upload() {
                 value={formData.document_type}
                 onChange={handleInputChange}
                 required
+                disabled={extracting}
               >
                 <option value="invoice">Invoice</option>
                 <option value="credit_note">Credit Note</option>
@@ -297,7 +396,10 @@ export default function Upload() {
                 onChange={handleInputChange}
                 placeholder="e.g., INV-2024-001"
                 required
+                disabled={extracting}
+                className={formData.invoice_number && !extracting ? 'auto-filled' : ''}
               />
+              {formData.invoice_number && !extracting && <span className="auto-fill-badge">AI</span>}
             </div>
 
             <div className="form-group">
@@ -308,7 +410,10 @@ export default function Upload() {
                 value={formData.date}
                 onChange={handleInputChange}
                 required
+                disabled={extracting}
+                className={formData.date && !extracting ? 'auto-filled' : ''}
               />
+              {formData.date && !extracting && <span className="auto-fill-badge">AI</span>}
             </div>
           </div>
 
@@ -324,7 +429,10 @@ export default function Upload() {
                 step="0.01"
                 min="0"
                 required
+                disabled={extracting}
+                className={formData.amount && !extracting ? 'auto-filled' : ''}
               />
+              {formData.amount && !extracting && <span className="auto-fill-badge">AI</span>}
             </div>
 
             <div className="form-group">
@@ -338,7 +446,10 @@ export default function Upload() {
                 step="0.01"
                 min="0"
                 required
+                disabled={extracting}
+                className={formData.vat && !extracting ? 'auto-filled' : ''}
               />
+              {formData.vat && !extracting && <span className="auto-fill-badge">AI</span>}
             </div>
           </div>
         </div>
@@ -347,7 +458,7 @@ export default function Upload() {
           <button 
             type="submit" 
             className="btn-primary"
-            disabled={uploading}
+            disabled={uploading || extracting}
           >
             {uploading ? (
               <span>
@@ -359,6 +470,8 @@ export default function Upload() {
                   />
                 </div>
               </span>
+            ) : extracting ? (
+              <span>🔍 AI Analyzing...</span>
             ) : (
               'Upload Document'
             )}
