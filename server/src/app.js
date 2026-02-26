@@ -23,8 +23,7 @@ app.use(cors({
 }));
 
 
-// Handle preflight requests for all routes
-app.options('/*', cors());
+
 
 // ============ SIMPLIFIED OPTIONS HANDLER ============
 app.use((req, res, next) => {
