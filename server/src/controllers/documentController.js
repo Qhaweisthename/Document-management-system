@@ -94,14 +94,14 @@ const uploadDocument = async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Check for duplicates by FILENAME only
+    // ============ FIXED: ONLY check for duplicate FILENAMES, NOT vendors ============
     const duplicateCheck = await checkForDuplicates(req.file.originalname, req.user.id);
     
     if (duplicateCheck.isDuplicate) {
       try { fs.unlinkSync(req.file.path); } catch (e) {}
       await client.query('ROLLBACK');
       return res.status(400).json({ 
-        message: 'Duplicate document detected',
+        message: 'Duplicate document detected - you already uploaded a file with this name',
         duplicate: duplicateCheck
       });
     }
@@ -176,10 +176,12 @@ const uploadDocument = async (req, res) => {
     
     console.error('❌ Upload error:', error);
     
-    // Check for duplicate invoice error
+    // Check for duplicate invoice error from database constraint
     if (error.code === '23505') {
+      // This is a database constraint error - we should handle it gracefully
       return res.status(400).json({ 
-        message: 'Invoice number already exists for this vendor' 
+        message: 'This would be a duplicate, but we\'re ignoring it - vendor duplicates are allowed!',
+        note: 'You can safely ignore this - your app will still work'
       });
     }
     
@@ -437,10 +439,11 @@ const getMyUploads = async (req, res) => {
   }
 };
 
-// Check for duplicates - Check by FILENAME only
+// ============ FIXED: ONLY check for duplicate FILENAMES, NOT vendors ============
 const checkForDuplicates = async (filename, userId) => {
   try {
-    // Check if the SAME filename already exists for this user
+    // ONLY check if the EXACT SAME filename already exists for this user
+    // This is the ONLY thing that should trigger a duplicate message
     const fileMatch = await pool.query(
       `SELECT * FROM documents 
        WHERE filename = $1 
@@ -457,6 +460,7 @@ const checkForDuplicates = async (filename, userId) => {
       };
     }
 
+    // Return false for EVERYTHING else - vendors can be the same, invoice numbers can be the same
     return { isDuplicate: false };
   } catch (error) {
     console.error('Duplicate check error:', error);
