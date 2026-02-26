@@ -27,6 +27,10 @@ export default function Upload() {
   
   const { user } = useAuth();
   const navigate = useNavigate();
+  
+  // Debug: Check if token exists
+  console.log('Token exists:', !!localStorage.getItem('token'));
+
   const api = axios.create({
     baseURL: `${import.meta.env.VITE_API_URL}/api`,
     headers: {
@@ -40,17 +44,29 @@ export default function Upload() {
 
   const fetchVendors = async () => {
     try {
-      // FIXED: Use /documents/vendors instead of /upload/vendors
+      console.log('Fetching vendors...');
       const response = await api.get('/documents/vendors');
+      console.log('Vendors fetched:', response.data);
       setVendors(response.data.vendors);
     } catch (error) {
-      console.error('Error fetching vendors:', error);
+      console.error('Error fetching vendors:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        headers: error.response?.headers
+      });
     }
   };
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
+      console.log('File selected:', {
+        name: selectedFile.name,
+        size: selectedFile.size,
+        type: selectedFile.type
+      });
+      
       if (selectedFile.size > 10 * 1024 * 1024) {
         setError('File size must be less than 10MB');
         return;
@@ -84,8 +100,9 @@ export default function Upload() {
   const handleCreateVendor = async (e) => {
     e.preventDefault();
     try {
-      // FIXED: Use /documents/vendors instead of /upload/vendors
+      console.log('Creating vendor:', newVendor);
       const response = await api.post('/documents/vendors', newVendor);
+      console.log('Vendor created:', response.data);
       setVendors([...vendors, response.data.vendor]);
       setFormData({ ...formData, vendor_id: response.data.vendor.id });
       setShowNewVendor(false);
@@ -93,6 +110,11 @@ export default function Upload() {
       setSuccess('Vendor created successfully!');
       setTimeout(() => setSuccess(''), 3000);
     } catch (error) {
+      console.error('Error creating vendor:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
       setError(error.response?.data?.message || 'Error creating vendor');
     }
   };
@@ -104,6 +126,17 @@ export default function Upload() {
       setError('Please select a file');
       return;
     }
+
+    // Log form data before submission
+    console.log('Submitting form with data:', {
+      vendor_id: formData.vendor_id,
+      document_type: formData.document_type,
+      date: formData.date,
+      amount: formData.amount,
+      vat: formData.vat,
+      invoice_number: formData.invoice_number,
+      file: file.name
+    });
 
     setUploading(true);
     setError('');
@@ -119,7 +152,8 @@ export default function Upload() {
     data.append('invoice_number', formData.invoice_number);
 
     try {
-      // FIXED: Use /documents/upload instead of /upload/document
+      console.log('Sending upload request to:', '/documents/upload');
+      
       const response = await api.post('/documents/upload', data, {
         headers: {
           'Content-Type': 'multipart/form-data'
@@ -129,9 +163,11 @@ export default function Upload() {
             (progressEvent.loaded * 100) / progressEvent.total
           );
           setUploadProgress(percentCompleted);
+          console.log('Upload progress:', percentCompleted);
         }
       });
 
+      console.log('Upload successful:', response.data);
       setSuccess('Document uploaded successfully!');
       setUploadProgress(0);
       
@@ -153,7 +189,24 @@ export default function Upload() {
       }, 2000);
       
     } catch (error) {
-      setError(error.response?.data?.message || 'Error uploading document');
+      console.error('Upload error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        headers: error.response?.headers,
+        config: {
+          url: error.config?.url,
+          method: error.config?.method,
+          data: error.config?.data
+        }
+      });
+      
+      // Show more specific error message
+      const errorMessage = error.response?.data?.message || 
+                          error.response?.data?.error || 
+                          error.message || 
+                          'Error uploading document';
+      setError(errorMessage);
     } finally {
       setUploading(false);
     }
