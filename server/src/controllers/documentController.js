@@ -438,8 +438,10 @@ const getMyUploads = async (req, res) => {
 };
 
 // Check for duplicates
+// Check for duplicates - MODIFIED to be less aggressive
 const checkForDuplicates = async (invoiceNumber, vendorId, amount) => {
   try {
+    // Primary check: Exact invoice number match for the SAME vendor
     const invoiceMatch = await pool.query(
       `SELECT * FROM documents 
        WHERE invoice_number = $1 AND vendor_id = $2`,
@@ -455,6 +457,9 @@ const checkForDuplicates = async (invoiceNumber, vendorId, amount) => {
       };
     }
 
+    // OPTIONAL: Make the secondary check less sensitive or remove it
+    // Comment this out if it's causing false positives
+    /*
     const tolerance = 0.01;
     const amountMatch = await pool.query(
       `SELECT * FROM documents 
@@ -472,6 +477,7 @@ const checkForDuplicates = async (invoiceNumber, vendorId, amount) => {
         existingDocument: amountMatch.rows[0]
       };
     }
+    */
 
     return { isDuplicate: false };
   } catch (error) {

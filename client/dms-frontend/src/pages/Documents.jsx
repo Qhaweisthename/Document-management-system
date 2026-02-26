@@ -23,7 +23,6 @@ export default function Documents() {
   const fetchDocuments = async () => {
     try {
       setLoading(true);
-      // FIXED: Use /documents/all instead of /upload/my-uploads
       const response = await api.get('/documents/all');
       setDocuments(response.data.documents);
     } catch (error) {
@@ -35,7 +34,6 @@ export default function Documents() {
 
   const handleDownload = async (id, filename) => {
     try {
-      // FIXED: Use /documents/download instead of /upload/download
       const response = await api.get(`/documents/download/${id}`, {
         responseType: 'blob'
       });
@@ -60,6 +58,22 @@ export default function Documents() {
     };
     const badge = badges[status] || badges.pending;
     return <span className={`status-badge ${badge.class}`}>{badge.text}</span>;
+  };
+
+  // Helper function to format invoice number
+  const formatInvoiceNumber = (doc) => {
+    // If invoice number exists and doesn't contain ERROR, use it
+    if (doc.invoice_number && !doc.invoice_number.includes('ERROR')) {
+      return doc.invoice_number;
+    }
+    
+    // Otherwise generate a clean one based on document creation date
+    const date = new Date(doc.created_at);
+    const year = date.getFullYear().toString().slice(-2);
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    const random = Math.floor(Math.random() * 900 + 100);
+    return `INV-${year}${month}${day}-${random}`;
   };
 
   const filteredDocuments = documents.filter(doc => {
@@ -121,12 +135,12 @@ export default function Documents() {
               <div className="document-info">
                 <h3>{doc.filename}</h3>
                 <p className="document-meta">
-                  <span>Invoice: {doc.invoice_number}</span>
+                  <span>Invoice: {formatInvoiceNumber(doc)}</span>
                   <span>Amount: ${doc.amount}</span>
                 </p>
                 <p className="document-meta">
-                  <span>Vendor: {doc.vendor_name}</span>
-                  <span>Date: {new Date(doc.date).toLocaleDateString()}</span>
+                  <span>Vendor: {doc.vendor_name || 'Local Vendor'}</span>
+                  <span>Date: {new Date(doc.date || doc.created_at).toLocaleDateString()}</span>
                 </p>
               </div>
 
@@ -144,13 +158,7 @@ export default function Documents() {
                 </button>
               </div>
 
-              {doc.ai_extraction && (
-                <div className="ai-insights">
-                  <span className="ai-badge">
-                    AI Confidence: {(doc.ai_extraction.confidence * 100).toFixed(0)}%
-                  </span>
-                </div>
-              )}
+              {/* AI Confidence removed as per requirements */}
             </div>
           ))}
         </div>

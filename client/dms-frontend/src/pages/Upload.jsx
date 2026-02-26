@@ -102,17 +102,20 @@ export default function Upload() {
     }
   }, [vendors]);
 
-  // ============ NEW FUNCTION: Generate random invoice number ============
-  const generateInvoiceNumber = () => {
-    const prefix = 'INV';
-    const date = new Date();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    const random = Math.floor(Math.random() * 900 + 100); // 100-999
-    return `${prefix}-${year}${month}${day}-${random}`;
-  };
-
+ // ============ IMPROVED: Generate truly unique invoice number ============
+const generateInvoiceNumber = () => {
+  const prefix = 'INV';
+  const date = new Date();
+  const year = date.getFullYear().toString().slice(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  
+  // Use timestamp + random to ensure uniqueness
+  const timestamp = Date.now().toString().slice(-6);
+  const random = Math.floor(Math.random() * 9000 + 1000); // 1000-9999
+  
+  return `${prefix}-${year}${month}${day}-${timestamp}${random}`;
+};
   // Extract data from file before upload with auto-generated invoice number
   const extractDataFromFile = async (selectedFile) => {
     setExtracting(true);
