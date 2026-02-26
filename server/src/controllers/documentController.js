@@ -196,6 +196,107 @@ const uploadDocument = async (req, res) => {
 };
 
 /**
+ * Update an existing document
+ * Admin and document owner can update
+ */
+const updateDocument = async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { id } = req.params;
+    const { 
+      vendor_id, 
+      document_type, 
+      date, 
+      amount, 
+      vat, 
+      invoice_number 
+    } = req.body;
+
+    // Validate required fields
+    if (!vendor_id || !document_type || !date || !amount || !vat || !invoice_number) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    await client.query('BEGIN');
+
+    // Check if document exists
+    const docCheck = await client.query(
+      'SELECT * FROM documents WHERE id = $1',
+      [id]
+    );
+
+    if (docCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Document not found' });
+    }
+
+    const document = docCheck.rows[0];
+
+    // Check if user is authorized (admin or document owner)
+    if (req.user.role !== 'admin' && req.user.id !== document.created_by) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Not authorized to update this document' });
+    }
+
+    // Check for duplicates (only if invoice number or vendor changed)
+    if (invoice_number !== document.invoice_number || vendor_id !== document.vendor_id) {
+      const duplicateCheck = await client.query(
+        `SELECT id FROM documents 
+         WHERE invoice_number = $1 
+         AND vendor_id = $2 
+         AND id != $3
+         AND created_by = $4`,
+        [invoice_number, vendor_id, id, req.user.id]
+      );
+
+      if (duplicateCheck.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ 
+          message: 'You already have another document with this invoice number for this vendor'
+        });
+      }
+    }
+
+    // Update document
+    const result = await client.query(
+      `UPDATE documents 
+       SET vendor_id = $1,
+           document_type = $2,
+           date = $3,
+           amount = $4,
+           vat = $5,
+           invoice_number = $6,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7
+       RETURNING *`,
+      [vendor_id, document_type, date, amount, vat, invoice_number, id]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Document updated successfully',
+      document: result.rows[0]
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('❌ Update error:', error);
+    
+    if (error.code === '23505') {
+      return res.status(400).json({ 
+        message: 'Invoice number already exists for this vendor'
+      });
+    }
+    
+    res.status(500).json({ message: 'Error updating document' });
+  } finally {
+    client.release();
+  }
+};
+
+/**
  * Extract data from document WITHOUT saving (preview)
  */
 const extractPreview = async (req, res) => {
@@ -774,6 +875,7 @@ const deleteDocument = async (req, res) => {
 module.exports = {
   upload,
   uploadDocument,
+  updateDocument,
   getAllDocuments,
   getMyUploads,
   getVendors,

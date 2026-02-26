@@ -129,7 +129,7 @@ const getAnomalies = async (userId) => {
       JOIN vendors v ON d.vendor_id = v.id
       WHERE d.created_by = $1
         AND d.amount > 0
-        AND ABS((d.vat / d.amount * 100) - 15) > 5
+        AND ABS((d.vat / NULLIF(d.amount, 0) * 100) - 15) > 5
       LIMIT 5
     `, [userId]);
 
@@ -239,7 +239,7 @@ const getApprovalEfficiency = async (userId) => {
     const avgDays = timeResult.rows[0]?.avg_days || 0;
     const approved = parseInt(timeResult.rows[0]?.approved_count || 0);
     const total = parseInt(timeResult.rows[0]?.total_count || 1);
-    const approvalRate = (approved / total) * 100;
+    const approvalRate = total > 0 ? (approved / total) * 100 : 0;
 
     // Current bottlenecks
     const bottlenecks = await pool.query(`
@@ -331,12 +331,12 @@ const getPredictions = async (userId) => {
   }
 };
 
-// Recommendations
+// Recommendations - FIXED division by zero errors
 const getRecommendations = async (userId) => {
   try {
     const recommendations = [];
 
-    // Check for vendors with high rejection rates
+    // Check for vendors with high rejection rates - with safety check
     const vendorRejections = await pool.query(`
       SELECT 
         v.name,
@@ -347,14 +347,20 @@ const getRecommendations = async (userId) => {
       WHERE d.created_by = $1
       GROUP BY v.id, v.name
       HAVING COUNT(CASE WHEN d.status = 'rejected' THEN 1 END) > 0
-        AND (COUNT(CASE WHEN d.status = 'rejected' THEN 1 END)::float / COUNT(*)) > 0.3
+        AND COUNT(*) > 0
     `, [userId]);
 
     vendorRejections.rows.forEach(v => {
-      recommendations.push({
-        type: 'vendor_review',
-        message: `Review vendor "${v.name}" - ${v.rejected}/${v.total} documents rejected (${Math.round(v.rejected/v.total*100)}%)`
-      });
+      // SAFETY CHECK: Ensure total > 0 before division
+      if (v.total > 0) {
+        const rejectionRate = (v.rejected / v.total) * 100;
+        if (rejectionRate > 30) {
+          recommendations.push({
+            type: 'vendor_review',
+            message: `Review vendor "${v.name}" - ${v.rejected}/${v.total} documents rejected (${Math.round(rejectionRate)}%)`
+          });
+        }
+      }
     });
 
     // Check for approval bottlenecks
@@ -378,12 +384,13 @@ const getRecommendations = async (userId) => {
       });
     });
 
-    // Check for tax inconsistencies
+    // Check for tax inconsistencies - FIXED division by zero
     const taxIssues = await pool.query(`
       SELECT COUNT(*) as count
       FROM documents
       WHERE created_by = $1
-        AND ABS((vat / amount * 100) - 15) > 5
+        AND amount > 0
+        AND ABS((vat / NULLIF(amount, 0) * 100) - 15) > 5
     `, [userId]);
 
     if (parseInt(taxIssues.rows[0]?.count || 0) > 0) {
@@ -404,11 +411,19 @@ const getRecommendations = async (userId) => {
     return recommendations.slice(0, 5); // Return top 5 recommendations
   } catch (error) {
     console.error('Error getting recommendations:', error);
-    return [{ type: 'error', message: 'Unable to generate recommendations at this time' }];
+    return [{ 
+      type: 'info', 
+      message: 'Unable to generate recommendations at this time' 
+    }];
   }
 };
 
 module.exports = {
   getInsightsDashboard,
+  getSpendingTrends,
+  getAnomalies,
+  getVendorInsights,
+  getApprovalEfficiency,
+  getPredictions,
   getRecommendations
 };

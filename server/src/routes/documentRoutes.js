@@ -12,7 +12,8 @@ const {
   downloadDocument,
   getDocumentWorkflowStatus,
   deleteDocument,
-  extractPreview  // ← Keep this ONE line, remove the duplicate below
+  extractPreview,
+  updateDocument
 } = require('../controllers/documentController');
 
 // REMOVE THIS DUPLICATE LINE:
@@ -84,6 +85,9 @@ router.post('/upload',
 
 // Create new vendor
 router.post('/vendors', protect, authorize('admin'), vendorValidation, createVendor);
+
+// Update document (admin or owner)
+router.put('/:id', protect, updateDocument);
 
 // Delete document
 router.delete('/:id', protect, authorize('admin'), deleteDocument);

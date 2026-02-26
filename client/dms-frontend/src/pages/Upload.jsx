@@ -7,14 +7,25 @@ import './Upload.css';
 export default function Upload() {
   const [file, setFile] = useState(null);
   const [vendors, setVendors] = useState([]);
+  
+  // Helper function to get today's date in YYYY-MM-DD format
+  const getTodaysDate = () => {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const [formData, setFormData] = useState({
     vendor_id: '',
     document_type: 'invoice',
-    date: '',
+    date: '', // Start empty - we'll set defaults after vendors load
     amount: '',
     vat: '',
     invoice_number: ''
   });
+  
   const [newVendor, setNewVendor] = useState({
     name: '',
     tax_number: ''
@@ -25,6 +36,7 @@ export default function Upload() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [extracting, setExtracting] = useState(false);
+  const [localVendorId, setLocalVendorId] = useState(null);
   
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -38,7 +50,6 @@ export default function Upload() {
     }
   });
 
-  // ============ ENSURE LOCAL VENDOR EXISTS ============
   const ensureLocalVendor = async () => {
     try {
       const localExists = vendors.some(v => v.name.toLowerCase() === 'local vendor');
@@ -64,6 +75,14 @@ export default function Upload() {
       const response = await api.get('/documents/vendors');
       console.log('Vendors fetched:', response.data);
       setVendors(response.data.vendors);
+      
+      // Find and store Local Vendor ID
+      const localVendor = response.data.vendors.find(v => 
+        v.name.toLowerCase() === 'local vendor'
+      );
+      if (localVendor) {
+        setLocalVendorId(localVendor.id);
+      }
     } catch (error) {
       console.error('Error fetching vendors:', error);
     }
@@ -73,47 +92,44 @@ export default function Upload() {
     fetchVendors();
   }, []);
 
-  // Auto-select Local Vendor
+  // This effect now ONLY runs when vendors load, and sets defaults
   useEffect(() => {
-    if (vendors.length > 0) {
-      const localVendor = vendors.find(v => 
-        v.name.toLowerCase() === 'local vendor'
-      );
-      
-      if (localVendor) {
+    if (vendors.length > 0 && localVendorId) {
+      // Only set default vendor if NO vendor is currently selected AND we're not extracting
+      if (!formData.vendor_id && !extracting) {
         setFormData(prev => ({
           ...prev,
-          vendor_id: localVendor.id
+          vendor_id: localVendorId,
+          date: getTodaysDate() // Set today's date as default
         }));
         console.log('🏠 Default vendor set to: Local Vendor');
-      } else {
-        console.log('⚠️ Local Vendor not found, will try to create it');
-        ensureLocalVendor();
       }
+    } else if (vendors.length > 0 && !localVendorId) {
+      console.log('⚠️ Local Vendor not found, will try to create it');
+      ensureLocalVendor();
     }
-  }, [vendors]);
+  }, [vendors, localVendorId, formData.vendor_id, extracting]);
 
-  // ============ GENERATE INVOICE NUMBER ============
   const generateInvoiceNumber = () => {
-    const prefix = 'INV';
-    const date = new Date();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    
-    const timestamp = Date.now().toString().slice(-6);
-    const random = Math.floor(Math.random() * 9000 + 1000);
-    
-    return `${prefix}-${year}${month}${day}-${timestamp}${random}`;
-  };
+  const prefix = 'INV';
+  const date = new Date();
+  const year = date.getFullYear().toString().slice(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  
+  // Simple random number between 100-999
+  const random = Math.floor(Math.random() * 900 + 100);
+  
+  return `${prefix}-${year}${month}${day}-${random}`;
+};
 
-  // ============ FIXED: AUTO-EXTRACT ALL DATA ============
   const extractDataFromFile = async (selectedFile) => {
     setExtracting(true);
     setError('');
     
     try {
       console.log('🔍 Attempting to extract data from file before upload...');
+      console.log('Current vendors before extraction:', vendors.map(v => v.name));
       
       const extractData = new FormData();
       extractData.append('document', selectedFile);
@@ -126,122 +142,125 @@ export default function Upload() {
       
       console.log('✅ Extraction preview response:', response.data);
       
-      // Generate invoice number FIRST
       const generatedInvoiceNumber = generateInvoiceNumber();
       
-      // ALWAYS set invoice number
-      let updatedFormData = {
-        invoice_number: generatedInvoiceNumber
+      // Start with invoice number only
+      let updatedData = {
+        invoice_number: generatedInvoiceNumber,
       };
       
-      // If extraction succeeded, add ALL fields
-      if (response.data.success && response.data.data) {
+      // If we got data from AI, use it
+      if (response.data.data) {
         const extracted = response.data.data;
         console.log('📊 Extracted data:', extracted);
         
-        // Format date if found
-        let formattedDate = '';
+        // ============ DATE HANDLING - FIXED ============
+        let formattedDate = null;
         if (extracted.date) {
-          console.log('Raw date from extraction:', extracted.date);
+          console.log('Raw extracted date:', extracted.date);
           
-          // Try to parse various date formats
-          if (extracted.date.includes('/')) {
+          // Check if it's already in YYYY-MM-DD format
+          if (extracted.date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            formattedDate = extracted.date;
+            console.log('Date already in correct format:', formattedDate);
+          }
+          // Handle MM/DD/YYYY or DD/MM/YYYY format
+          else if (extracted.date.includes('/')) {
             const parts = extracted.date.split('/');
             if (parts.length === 3) {
               if (parts[2].length === 4) {
-                // Format: MM/DD/YYYY or DD/MM/YYYY
                 formattedDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
               } else if (parts[2].length === 2) {
-                // Format: MM/DD/YY or DD/MM/YY
                 formattedDate = `20${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
               }
             }
-          } else if (extracted.date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-            // Already in YYYY-MM-DD format
-            formattedDate = extracted.date;
-          } else if (extracted.date.match(/^\d{2}-\d{2}-\d{4}$/)) {
-            // Format: DD-MM-YYYY
-            const parts = extracted.date.split('-');
-            formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
           }
-          
-          console.log('Formatted date:', formattedDate);
+          // Handle DD-MM-YYYY format
+          else if (extracted.date.includes('-')) {
+            const parts = extracted.date.split('-');
+            if (parts.length === 3 && parts[2].length === 4) {
+              formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+            }
+          }
         }
         
-        // Parse amount and vat to ensure they're numbers
-        let amount = extracted.amount;
-        let vat = extracted.vat;
-        
-        // Remove any non-numeric characters except decimal point
-        if (amount) {
-          amount = amount.replace(/[^\d.-]/g, '');
-          console.log('Cleaned amount:', amount);
+        // Add AI extracted data - these will override defaults
+        if (formattedDate) {
+          updatedData.date = formattedDate;
+          console.log('Setting date to:', formattedDate);
         }
-        
-        if (vat) {
-          vat = vat.replace(/[^\d.-]/g, '');
-          console.log('Cleaned vat:', vat);
-        }
-        
-        // Add ALL extracted data to form
-        updatedFormData = {
-          ...updatedFormData,
-          date: formattedDate || '',
-          amount: amount || '',
-          vat: vat || '',
-        };
+        if (extracted.amount) updatedData.amount = extracted.amount;
+        if (extracted.vat) updatedData.vat = extracted.vat;
 
-        // Try to auto-select vendor
+        // ============ VENDOR HANDLING - FIXED ============
         if (extracted.vendor && vendors.length > 0) {
           console.log('Looking for vendor:', extracted.vendor);
-          const matchedVendor = vendors.find(v => 
-            v.name.toLowerCase().includes(extracted.vendor.toLowerCase()) ||
-            extracted.vendor.toLowerCase().includes(v.name.toLowerCase())
+          console.log('Available vendors:', vendors.map(v => v.name));
+          
+          // Try to find exact match first (case insensitive, trimmed)
+          let matchedVendor = vendors.find(v => 
+            v.name.toLowerCase().trim() === extracted.vendor.toLowerCase().trim()
           );
           
+          // If no exact match, try partial match
+          if (!matchedVendor) {
+            matchedVendor = vendors.find(v => 
+              v.name.toLowerCase().includes(extracted.vendor.toLowerCase()) ||
+              extracted.vendor.toLowerCase().includes(v.name.toLowerCase())
+            );
+          }
+          
           if (matchedVendor) {
-            updatedFormData.vendor_id = matchedVendor.id;
+            console.log('✅ Found matching vendor:', matchedVendor.name, 'with ID:', matchedVendor.id);
+            updatedData.vendor_id = matchedVendor.id;
             setSuccess(`✨ Vendor auto-selected: ${matchedVendor.name}`);
             setTimeout(() => setSuccess(''), 3000);
           } else {
-            // Vendor not found, pre-fill new vendor form
+            console.log('❌ No matching vendor found for:', extracted.vendor);
+            // Pre-fill new vendor form
             setNewVendor(prev => ({
               ...prev,
               name: extracted.vendor
             }));
+            // Show message but don't auto-select
+            setSuccess(`📋 Vendor "${extracted.vendor}" extracted - click "+ New" to add it`);
+            setTimeout(() => setSuccess(''), 4000);
           }
         }
         
-        setSuccess(`✅ AI extracted: Date: ${formattedDate || 'N/A'}, Amount: $${amount || 'N/A'}, VAT: $${vat || 'N/A'}`);
-        setTimeout(() => setSuccess(''), 4000);
+        // Count extracted fields for success message
+        const extractedFields = Object.keys(extracted).filter(k => extracted[k]).length;
+        setSuccess(`✅ AI extracted: ${extractedFields} fields`);
       } else {
-        setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated (AI extraction unavailable)`);
-        setTimeout(() => setSuccess(''), 3000);
+        setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated`);
       }
       
-      // Update form with ALL data at once
-      console.log('Updating form with:', updatedFormData);
-      setFormData(prev => ({
-        ...prev,
-        ...updatedFormData
-      }));
+      // Update form with all data - AI values will override defaults
+      setFormData(prev => {
+        const newData = {
+          ...prev,
+          ...updatedData
+        };
+        // Ensure date is set (either from AI or default to today)
+        if (!newData.date) newData.date = getTodaysDate();
+        console.log('Updated form data:', newData);
+        return newData;
+      });
       
     } catch (error) {
       console.error('❌ Extraction preview failed:', error);
-      // Still generate invoice number
       const generatedInvoiceNumber = generateInvoiceNumber();
       setFormData(prev => ({
         ...prev,
-        invoice_number: generatedInvoiceNumber
+        invoice_number: generatedInvoiceNumber,
+        date: getTodaysDate() // Default to today on error
       }));
       setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated`);
-      setTimeout(() => setSuccess(''), 3000);
     } finally {
       setExtracting(false);
     }
   };
 
-  // ============ HANDLE FILE CHANGE ============
   const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
@@ -265,7 +284,12 @@ export default function Upload() {
       setFile(selectedFile);
       setError('');
       
-      // AUTO-EXTRACT IMMEDIATELY
+      const tempInvoiceNumber = generateInvoiceNumber();
+      setFormData(prev => ({
+        ...prev,
+        invoice_number: tempInvoiceNumber
+      }));
+      
       await extractDataFromFile(selectedFile);
     }
   };
@@ -310,13 +334,20 @@ export default function Upload() {
       return;
     }
 
+    // Ensure amount and vat have default values (0) if empty
+    const submitData = {
+      ...formData,
+      amount: formData.amount === '' ? '0' : formData.amount,
+      vat: formData.vat === '' ? '0' : formData.vat
+    };
+
     console.log('Submitting form with data:', {
-      vendor_id: formData.vendor_id,
-      document_type: formData.document_type,
-      date: formData.date,
-      amount: formData.amount,
-      vat: formData.vat,
-      invoice_number: formData.invoice_number,
+      vendor_id: submitData.vendor_id,
+      document_type: submitData.document_type,
+      date: submitData.date,
+      amount: submitData.amount,
+      vat: submitData.vat,
+      invoice_number: submitData.invoice_number,
       file: file.name
     });
 
@@ -326,12 +357,12 @@ export default function Upload() {
 
     const data = new FormData();
     data.append('document', file);
-    data.append('vendor_id', formData.vendor_id);
-    data.append('document_type', formData.document_type);
-    data.append('date', formData.date);
-    data.append('amount', formData.amount);
-    data.append('vat', formData.vat);
-    data.append('invoice_number', formData.invoice_number);
+    data.append('vendor_id', submitData.vendor_id);
+    data.append('document_type', submitData.document_type);
+    data.append('date', submitData.date);
+    data.append('amount', submitData.amount);
+    data.append('vat', submitData.vat);
+    data.append('invoice_number', submitData.invoice_number);
 
     try {
       console.log('Sending upload request to:', '/documents/upload');
@@ -370,11 +401,8 @@ export default function Upload() {
       }, 2000);
       
     } catch (error) {
-      console.error('Upload error:', error);
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          error.message || 
-                          'Error uploading document';
+      console.error('Upload error details:', error.response?.data || error.message);
+      const errorMessage = error.response?.data?.message || 'Error uploading document';
       setError(errorMessage);
     } finally {
       setUploading(false);
@@ -495,22 +523,23 @@ export default function Upload() {
                 disabled={extracting}
                 className={formData.date && !extracting ? 'auto-filled' : ''}
               />
-              {formData.date && !extracting && <span className="auto-fill-badge">AI</span>}
+              {formData.date && !extracting && <span className="auto-fill-badge">{
+                formData.date === getTodaysDate() ? 'Today' : 'AI'
+              }</span>}
             </div>
           </div>
 
           <div className="form-row">
             <div className="form-group">
-              <label>Amount *</label>
+              <label>Amount</label>
               <input
                 type="number"
                 name="amount"
                 value={formData.amount}
                 onChange={handleInputChange}
-                placeholder="0.00"
+                placeholder="0.00 (optional)"
                 step="0.01"
                 min="0"
-                required
                 disabled={extracting}
                 className={formData.amount && !extracting ? 'auto-filled' : ''}
               />
@@ -518,16 +547,15 @@ export default function Upload() {
             </div>
 
             <div className="form-group">
-              <label>VAT *</label>
+              <label>VAT</label>
               <input
                 type="number"
                 name="vat"
                 value={formData.vat}
                 onChange={handleInputChange}
-                placeholder="0.00"
+                placeholder="0.00 (optional)"
                 step="0.01"
                 min="0"
-                required
                 disabled={extracting}
                 className={formData.vat && !extracting ? 'auto-filled' : ''}
               />

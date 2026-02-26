@@ -209,3 +209,148 @@
     gap: 4px;
   }
 }
+
+/* Add to your existing Documents.css */
+
+.document-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.download-btn, .delete-btn {
+  background: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 14px;
+  color: #4b5563;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.download-btn:hover {
+  background-color: #f8fafc;
+  border-color: #667eea;
+  color: #667eea;
+}
+
+.delete-btn:hover {
+  background-color: #fee2e2;
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Add to your existing Documents.css */
+
+.edit-btn {
+  background: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 14px;
+  color: #4b5563;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.edit-btn:hover {
+  background-color: #f8fafc;
+  border-color: #10b981;
+  color: #10b981;
+}
+
+/* Edit Form Styles */
+.edit-form {
+  padding: 16px;
+  background-color: #f8fafc;
+  border-radius: 12px;
+  width: 100%;
+}
+
+.edit-form h4 {
+  margin: 0 0 16px 0;
+  color: #1e293b;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.edit-form-group {
+  margin-bottom: 12px;
+}
+
+.edit-form-group label {
+  display: block;
+  margin-bottom: 4px;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.edit-form-group input,
+.edit-form-group select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.edit-form-group input:focus,
+.edit-form-group select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.edit-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.save-btn, .cancel-btn {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.save-btn {
+  background-color: #10b981;
+  color: white;
+}
+
+.save-btn:hover {
+  background-color: #059669;
+}
+
+.cancel-btn {
+  background-color: #e2e8f0;
+  color: #4b5563;
+}
+
+.cancel-btn:hover {
+  background-color: #cbd5e0;
+}
+
+.document-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.download-btn, .edit-btn, .delete-btn {
+  padding: 6px 10px;
+  font-size: 14px;
+}
