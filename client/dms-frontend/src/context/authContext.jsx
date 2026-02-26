@@ -33,7 +33,7 @@ export const AuthProvider = ({ children }) => {
       if (token) {
         setAuthToken(token);
         try {
-          const response = await axios.get(`${import.meta.env.VITE_API_URL}/auth/me`);
+          const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/auth/me`);
           setUser(response.data.user);
         } catch (error) {
           console.error('Failed to load user:', error);
@@ -51,7 +51,7 @@ export const AuthProvider = ({ children }) => {
   const register = async (userData) => {
     try {
       setError(null);
-      const response = await axios.post(`${import.meta.env.VITE_API_URL}/auth/register`, userData);
+      const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/register`, userData);
       
       const { token, user } = response.data;
       localStorage.setItem('token', token);
@@ -70,7 +70,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       setError(null);
-      const response = await axios.post(`${import.meta.env.VITE_API_URL}/auth/login`, {
+      const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
         email,
         password
       });
