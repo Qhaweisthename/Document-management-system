@@ -5,18 +5,24 @@ const { v4: uuidv4 } = require('uuid');
 const pool = require('../config/db');
 const aiExtractionService = require('../services/aiExtractionService');
 
-// Configure storage
+// ============ PRODUCTION-READY CONFIGURATION ============
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const UPLOAD_DIR = process.env.NODE_ENV === 'production' 
+  ? '/tmp/uploads' // Render's temporary directory
+  : path.join(__dirname, '../../uploads');
+
+// Ensure upload directory exists
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  console.log(`📁 Created upload directory: ${UPLOAD_DIR}`);
+}
+
+// Configure storage with production support
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../uploads');
-    // Create uploads directory if it doesn't exist
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
+    cb(null, UPLOAD_DIR);
   },
   filename: (req, file, cb) => {
-    // Generate unique filename
     const uniqueId = uuidv4();
     const fileExt = path.extname(file.originalname);
     const fileName = `${uniqueId}${fileExt}`;
@@ -34,14 +40,14 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// Configure multer
+// Configure multer with production settings
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: MAX_FILE_SIZE,
   },
   fileFilter: fileFilter
-}).single('document'); // 'document' is the field name
+}).single('document');
 
 /**
  * Upload a new document
@@ -51,11 +57,23 @@ const uploadDocument = async (req, res) => {
   const client = await pool.connect();
   
   try {
-    await client.query('BEGIN');
+    // Log request for debugging
+    console.log('📤 Upload request received:', {
+      hasFile: !!req.file,
+      body: req.body,
+      user: req.user?.id
+    });
 
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
+
+    console.log('📁 File saved:', {
+      originalname: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+      path: req.file.path
+    });
 
     const { 
       vendor_id, 
@@ -69,16 +87,18 @@ const uploadDocument = async (req, res) => {
     // Validate required fields
     if (!vendor_id || !document_type || !date || !amount || !vat || !invoice_number) {
       // Delete uploaded file if validation fails
-      fs.unlinkSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
       await client.query('ROLLBACK');
       return res.status(400).json({ message: 'Missing required fields' });
     }
+
+    await client.query('BEGIN');
 
     // Check for duplicates before inserting
     const duplicateCheck = await checkForDuplicates(invoice_number, vendor_id, amount);
     
     if (duplicateCheck.isDuplicate) {
-      fs.unlinkSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         message: 'Duplicate document detected',
@@ -126,14 +146,17 @@ const uploadDocument = async (req, res) => {
       })]
     );
 
-    // Perform REAL AI extraction using Google Cloud Vision
-    // Don't await this - let it run in the background
+    await client.query('COMMIT');
+
+    // Perform AI extraction in background (don't await)
     performAIExtraction(document.id, req.file.path).catch(error => {
       console.error('Background AI extraction error:', error);
     });
 
-    await client.query('COMMIT');
-
+    // Set CORS headers explicitly for this response
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
     res.status(201).json({
       message: 'Document uploaded successfully and sent for approval',
       document: {
@@ -148,13 +171,13 @@ const uploadDocument = async (req, res) => {
     
     // Delete uploaded file if database insert fails
     if (req.file) {
-      fs.unlinkSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
     }
     
-    console.error('Upload error:', error);
+    console.error('❌ Upload error:', error);
     
     // Check for duplicate invoice error
-    if (error.code === '23505') { // Unique violation
+    if (error.code === '23505') {
       return res.status(400).json({ 
         message: 'Invoice number already exists for this vendor' 
       });
@@ -171,11 +194,9 @@ const uploadDocument = async (req, res) => {
 
 /**
  * Get ALL documents (for viewers, approvers, and admins)
- * This ensures everyone sees meaningful data
  */
 const getAllDocuments = async (req, res) => {
   try {
-    // All roles see ALL documents
     const result = await pool.query(
       `SELECT 
         d.*, 
@@ -207,7 +228,6 @@ const getAllDocuments = async (req, res) => {
       ORDER BY d.created_at DESC`
     );
 
-    // Add workflow status to each document
     const documentsWithStatus = result.rows.map(doc => {
       let workflowStatus = 'Unknown';
       
@@ -224,7 +244,6 @@ const getAllDocuments = async (req, res) => {
         workflowStatus = stepLabels[doc.current_step] || 'In Review';
       }
 
-      // Parse AI extraction if exists
       let aiExtraction = null;
       if (doc.ai_extraction) {
         try {
@@ -236,7 +255,6 @@ const getAllDocuments = async (req, res) => {
         }
       }
 
-      // Determine if user can edit this document
       const canEdit = req.user.role === 'admin' || req.user.id === doc.created_by;
 
       return {
@@ -244,10 +262,12 @@ const getAllDocuments = async (req, res) => {
         workflow_status: workflowStatus,
         ai_extraction: aiExtraction,
         can_edit: canEdit,
-        can_delete: req.user.role === 'admin' // Only admins can delete
+        can_delete: req.user.role === 'admin'
       };
     });
 
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.json({ documents: documentsWithStatus });
   } catch (error) {
     console.error('Error fetching all documents:', error);
@@ -257,7 +277,6 @@ const getAllDocuments = async (req, res) => {
 
 /**
  * Get only the current user's uploads
- * Useful for "My Documents" view
  */
 const getMyUploads = async (req, res) => {
   try {
@@ -293,7 +312,6 @@ const getMyUploads = async (req, res) => {
       [req.user.id]
     );
 
-    // Add workflow status to each document
     const documentsWithStatus = result.rows.map(doc => {
       let workflowStatus = 'Unknown';
       
@@ -310,7 +328,6 @@ const getMyUploads = async (req, res) => {
         workflowStatus = stepLabels[doc.current_step] || 'In Review';
       }
 
-      // Parse AI extraction if exists
       let aiExtraction = null;
       if (doc.ai_extraction) {
         try {
@@ -329,6 +346,8 @@ const getMyUploads = async (req, res) => {
       };
     });
 
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.json({ documents: documentsWithStatus });
   } catch (error) {
     console.error('Error fetching my uploads:', error);
@@ -339,7 +358,6 @@ const getMyUploads = async (req, res) => {
 // Check for duplicates
 const checkForDuplicates = async (invoiceNumber, vendorId, amount) => {
   try {
-    // Primary check: Invoice number match
     const invoiceMatch = await pool.query(
       `SELECT * FROM documents 
        WHERE invoice_number = $1 AND vendor_id = $2`,
@@ -355,8 +373,7 @@ const checkForDuplicates = async (invoiceNumber, vendorId, amount) => {
       };
     }
 
-    // Secondary check: Vendor + amount (within reasonable tolerance)
-    const tolerance = 0.01; // 1% tolerance for amount
+    const tolerance = 0.01;
     const amountMatch = await pool.query(
       `SELECT * FROM documents 
        WHERE vendor_id = $1 
@@ -388,7 +405,6 @@ const performAIExtraction = async (documentId, filePath) => {
   try {
     console.log(`🤖 Starting AI extraction for document ${documentId}`);
     
-    // Check if file exists and is readable
     if (!fs.existsSync(filePath)) {
       throw new Error(`File not found: ${filePath}`);
     }
@@ -397,13 +413,8 @@ const performAIExtraction = async (documentId, filePath) => {
     
     if (result.success) {
       console.log(`✅ AI extraction successful for document ${documentId}`);
-      console.log(`📊 Extracted:`, result.data);
-      console.log(`📈 Confidence: ${(result.confidence * 100).toFixed(1)}%`);
-      
-      // Update document with extracted data if fields are missing or need verification
       await updateDocumentWithExtractedData(documentId, result.data);
       
-      // Log successful extraction
       await pool.query(
         `INSERT INTO document_logs (document_id, log_type, details) 
          VALUES ($1, 'info', $2)`,
@@ -414,11 +425,8 @@ const performAIExtraction = async (documentId, filePath) => {
           timestamp: new Date()
         })]
       );
-      
     } else {
       console.error(`❌ AI extraction failed for document ${documentId}:`, result.error);
-      
-      // Log failure
       await pool.query(
         `INSERT INTO document_logs (document_id, log_type, details) 
          VALUES ($1, 'extraction_issue', $2)`,
@@ -432,8 +440,6 @@ const performAIExtraction = async (documentId, filePath) => {
     return result;
   } catch (error) {
     console.error('AI extraction error:', error);
-    
-    // Log critical error
     await pool.query(
       `INSERT INTO document_logs (document_id, log_type, details) 
        VALUES ($1, 'extraction_issue', $2)`,
@@ -443,7 +449,6 @@ const performAIExtraction = async (documentId, filePath) => {
         timestamp: new Date()
       })]
     );
-    
     return { success: false, error: error.message };
   }
 };
@@ -457,7 +462,6 @@ const updateDocumentWithExtractedData = async (documentId, extractedData) => {
     const values = [];
     let paramCount = 1;
 
-    // Get current document data
     const currentDoc = await pool.query(
       'SELECT * FROM documents WHERE id = $1',
       [documentId]
@@ -467,7 +471,6 @@ const updateDocumentWithExtractedData = async (documentId, extractedData) => {
 
     const document = currentDoc.rows[0];
 
-    // Update invoice number if missing or different
     if (extractedData.invoice_number && 
         (!document.invoice_number || document.invoice_number !== extractedData.invoice_number)) {
       updates.push(`invoice_number = $${paramCount}`);
@@ -475,7 +478,6 @@ const updateDocumentWithExtractedData = async (documentId, extractedData) => {
       paramCount++;
     }
 
-    // Update amount if missing or significantly different
     if (extractedData.amount) {
       const extractedAmount = parseFloat(extractedData.amount);
       const currentAmount = parseFloat(document.amount);
@@ -487,9 +489,7 @@ const updateDocumentWithExtractedData = async (documentId, extractedData) => {
       }
     }
 
-    // Update date if missing
     if (extractedData.date && !document.date) {
-      // Try to parse the date
       const parsedDate = new Date(extractedData.date);
       if (!isNaN(parsedDate.getTime())) {
         updates.push(`date = $${paramCount}`);
@@ -498,7 +498,6 @@ const updateDocumentWithExtractedData = async (documentId, extractedData) => {
       }
     }
 
-    // Try to match vendor if vendor_id is missing or different
     if (extractedData.vendor) {
       const vendorResult = await pool.query(
         'SELECT id FROM vendors WHERE name ILIKE $1',
@@ -513,7 +512,6 @@ const updateDocumentWithExtractedData = async (documentId, extractedData) => {
       }
     }
 
-    // Add AI extraction metadata
     updates.push(`ai_extraction = $${paramCount}`);
     values.push(JSON.stringify({
       extracted: extractedData,
@@ -535,12 +533,14 @@ const updateDocumentWithExtractedData = async (documentId, extractedData) => {
   }
 };
 
-// Get all vendors (for dropdown)
+// Get all vendors
 const getVendors = async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT id, name, tax_number FROM vendors ORDER BY name'
     );
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.json({ vendors: result.rows });
   } catch (error) {
     console.error('Error fetching vendors:', error);
@@ -562,6 +562,8 @@ const createVendor = async (req, res) => {
       [name, tax_number]
     );
 
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.status(201).json({
       message: 'Vendor created successfully',
       vendor: result.rows[0]
@@ -572,7 +574,7 @@ const createVendor = async (req, res) => {
   }
 };
 
-// Download document (all roles can download)
+// Download document
 const downloadDocument = async (req, res) => {
   try {
     const { id } = req.params;
@@ -588,12 +590,10 @@ const downloadDocument = async (req, res) => {
 
     const document = result.rows[0];
     
-    // Check if file exists
     if (!fs.existsSync(document.filepath)) {
       return res.status(404).json({ message: 'File not found on server' });
     }
 
-    // Log download with role info
     await pool.query(
       `INSERT INTO document_logs (document_id, log_type, details) 
        VALUES ($1, 'info', $2)`,
@@ -606,6 +606,8 @@ const downloadDocument = async (req, res) => {
       })]
     );
 
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.download(document.filepath, document.filename);
   } catch (error) {
     console.error('Download error:', error);
@@ -613,7 +615,7 @@ const downloadDocument = async (req, res) => {
   }
 };
 
-// Get document workflow status (all roles can view)
+// Get document workflow status
 const getDocumentWorkflowStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -647,6 +649,8 @@ const getDocumentWorkflowStatus = async (req, res) => {
       return res.status(404).json({ message: 'Document not found' });
     }
 
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.json({ workflow: result.rows[0] });
   } catch (error) {
     console.error('Error fetching workflow status:', error);
@@ -663,7 +667,6 @@ const deleteDocument = async (req, res) => {
     
     const { id } = req.params;
     
-    // Check if document exists
     const docResult = await client.query(
       'SELECT * FROM documents WHERE id = $1',
       [id]
@@ -676,16 +679,16 @@ const deleteDocument = async (req, res) => {
     
     const document = docResult.rows[0];
     
-    // Delete the physical file
     if (fs.existsSync(document.filepath)) {
       fs.unlinkSync(document.filepath);
     }
     
-    // Delete related records (approvals, logs will cascade due to foreign keys)
     await client.query('DELETE FROM documents WHERE id = $1', [id]);
     
     await client.query('COMMIT');
     
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
     res.json({ message: 'Document deleted successfully' });
     
   } catch (error) {
