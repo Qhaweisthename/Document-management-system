@@ -29,7 +29,6 @@ export default function Upload() {
   const { user } = useAuth();
   const navigate = useNavigate();
   
-  // Debug: Check if token exists
   console.log('Token exists:', !!localStorage.getItem('token'));
 
   const api = axios.create({
@@ -42,7 +41,6 @@ export default function Upload() {
   // ============ ENSURE LOCAL VENDOR EXISTS ============
   const ensureLocalVendor = async () => {
     try {
-      // Check if Local Vendor already exists
       const localExists = vendors.some(v => v.name.toLowerCase() === 'local vendor');
       
       if (!localExists && vendors.length > 0) {
@@ -52,7 +50,6 @@ export default function Upload() {
           tax_number: '000000000'
         });
         
-        // Refresh vendors list
         await fetchVendors();
         console.log('✅ Local Vendor created:', response.data);
       }
@@ -68,12 +65,7 @@ export default function Upload() {
       console.log('Vendors fetched:', response.data);
       setVendors(response.data.vendors);
     } catch (error) {
-      console.error('Error fetching vendors:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-        headers: error.response?.headers
-      });
+      console.error('Error fetching vendors:', error);
     }
   };
 
@@ -81,7 +73,7 @@ export default function Upload() {
     fetchVendors();
   }, []);
 
-  // ============ SIMPLE FIX: Auto-select Local Vendor when vendors load ============
+  // Auto-select Local Vendor
   useEffect(() => {
     if (vendors.length > 0) {
       const localVendor = vendors.find(v => 
@@ -96,13 +88,12 @@ export default function Upload() {
         console.log('🏠 Default vendor set to: Local Vendor');
       } else {
         console.log('⚠️ Local Vendor not found, will try to create it');
-        // Try to create Local Vendor if it doesn't exist
         ensureLocalVendor();
       }
     }
   }, [vendors]);
 
-  // ============ IMPROVED: Generate truly unique invoice number ============
+  // ============ GENERATE INVOICE NUMBER ============
   const generateInvoiceNumber = () => {
     const prefix = 'INV';
     const date = new Date();
@@ -110,14 +101,13 @@ export default function Upload() {
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const day = date.getDate().toString().padStart(2, '0');
     
-    // Use timestamp + random to ensure uniqueness
     const timestamp = Date.now().toString().slice(-6);
-    const random = Math.floor(Math.random() * 9000 + 1000); // 1000-9999
+    const random = Math.floor(Math.random() * 9000 + 1000);
     
     return `${prefix}-${year}${month}${day}-${timestamp}${random}`;
   };
 
-  // Extract data from file before upload with auto-generated invoice number
+  // ============ FIXED: AUTO-EXTRACT DATA ============
   const extractDataFromFile = async (selectedFile) => {
     setExtracting(true);
     setError('');
@@ -134,35 +124,48 @@ export default function Upload() {
         }
       });
       
-      console.log('✅ Extraction preview successful:', response.data);
+      console.log('✅ Extraction preview response:', response.data);
       
-      // Generate a UNIQUE invoice number
+      // Generate invoice number FIRST
       const generatedInvoiceNumber = generateInvoiceNumber();
       
+      // ALWAYS set invoice number - this is guaranteed
+      let updatedFormData = {
+        invoice_number: generatedInvoiceNumber
+      };
+      
+      // If extraction succeeded, add those fields
       if (response.data.success && response.data.data) {
         const extracted = response.data.data;
+        console.log('📊 Extracted data:', extracted);
         
         // Format date if found
         let formattedDate = extracted.date;
-        if (extracted.date && extracted.date.includes('/')) {
-          const parts = extracted.date.split('/');
-          if (parts.length === 3) {
-            if (parts[2].length === 4) {
-              formattedDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+        if (extracted.date) {
+          // Try to parse various date formats
+          if (extracted.date.includes('/')) {
+            const parts = extracted.date.split('/');
+            if (parts.length === 3) {
+              if (parts[2].length === 4) {
+                formattedDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+              } else if (parts[2].length === 2) {
+                formattedDate = `20${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+              }
             }
+          } else if (extracted.date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            formattedDate = extracted.date;
           }
         }
         
-        // Auto-fill the form with extracted data + generated invoice number
-        setFormData(prev => ({
-          ...prev,
-          invoice_number: generatedInvoiceNumber,
-          date: formattedDate || prev.date,
-          amount: extracted.amount || prev.amount,
-          vat: extracted.vat || prev.vat,
-        }));
+        // Add extracted data to form
+        updatedFormData = {
+          ...updatedFormData,
+          date: formattedDate || '',
+          amount: extracted.amount || '',
+          vat: extracted.vat || '',
+        };
 
-        // Try to auto-select vendor if match found
+        // Try to auto-select vendor
         if (extracted.vendor && vendors.length > 0) {
           const matchedVendor = vendors.find(v => 
             v.name.toLowerCase().includes(extracted.vendor.toLowerCase()) ||
@@ -170,37 +173,41 @@ export default function Upload() {
           );
           
           if (matchedVendor) {
-            setFormData(prev => ({
-              ...prev,
-              vendor_id: matchedVendor.id
-            }));
+            updatedFormData.vendor_id = matchedVendor.id;
             setSuccess(`✨ Vendor auto-selected: ${matchedVendor.name}`);
             setTimeout(() => setSuccess(''), 3000);
           }
         }
+        
+        setSuccess(`✅ AI extracted data and generated invoice #${generatedInvoiceNumber}`);
+        setTimeout(() => setSuccess(''), 3000);
+      } else {
+        setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated (AI extraction unavailable)`);
+        setTimeout(() => setSuccess(''), 3000);
       }
       
-      // Always ensure we have an invoice number
-      if (!formData.invoice_number) {
-        setFormData(prev => ({
-          ...prev,
-          invoice_number: generatedInvoiceNumber
-        }));
-      }
+      // Update form with all data at once
+      setFormData(prev => ({
+        ...prev,
+        ...updatedFormData
+      }));
       
     } catch (error) {
       console.error('❌ Extraction preview failed:', error);
-      // Still generate an invoice number even on error
+      // Still generate invoice number
       const generatedInvoiceNumber = generateInvoiceNumber();
       setFormData(prev => ({
         ...prev,
         invoice_number: generatedInvoiceNumber
       }));
+      setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated`);
+      setTimeout(() => setSuccess(''), 3000);
     } finally {
       setExtracting(false);
     }
   };
 
+  // ============ HANDLE FILE CHANGE ============
   const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
@@ -210,7 +217,6 @@ export default function Upload() {
         type: selectedFile.type
       });
       
-      // Validate file
       if (selectedFile.size > 10 * 1024 * 1024) {
         setError('File size must be less than 10MB');
         return;
@@ -225,14 +231,7 @@ export default function Upload() {
       setFile(selectedFile);
       setError('');
       
-      // Generate a UNIQUE invoice number
-      const tempInvoiceNumber = generateInvoiceNumber();
-      setFormData(prev => ({
-        ...prev,
-        invoice_number: tempInvoiceNumber
-      }));
-      
-      // Try to extract data and pre-fill form
+      // AUTO-EXTRACT IMMEDIATELY
       await extractDataFromFile(selectedFile);
     }
   };
@@ -264,11 +263,7 @@ export default function Upload() {
       setSuccess('Vendor created successfully!');
       setTimeout(() => setSuccess(''), 3000);
     } catch (error) {
-      console.error('Error creating vendor:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
-      });
+      console.error('Error creating vendor:', error);
       setError(error.response?.data?.message || 'Error creating vendor');
     }
   };
@@ -281,7 +276,6 @@ export default function Upload() {
       return;
     }
 
-    // Log form data before submission
     console.log('Submitting form with data:', {
       vendor_id: formData.vendor_id,
       document_type: formData.document_type,
@@ -317,7 +311,6 @@ export default function Upload() {
             (progressEvent.loaded * 100) / progressEvent.total
           );
           setUploadProgress(percentCompleted);
-          console.log('Upload progress:', percentCompleted);
         }
       });
 
@@ -343,33 +336,11 @@ export default function Upload() {
       }, 2000);
       
     } catch (error) {
-      console.error('Upload error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-        headers: error.response?.headers,
-        config: {
-          url: error.config?.url,
-          method: error.config?.method,
-          data: error.config?.data
-        }
-      });
-      
-      // Show more specific error message from the server
-      const serverMessage = error.response?.data?.message;
-      const serverError = error.response?.data?.error;
-      const duplicateInfo = error.response?.data?.duplicate;
-      
-      let errorMessage = error.message || 'Error uploading document';
-      
-      if (serverMessage) {
-        errorMessage = serverMessage;
-      } else if (serverError) {
-        errorMessage = serverError;
-      } else if (duplicateInfo) {
-        errorMessage = duplicateInfo.reason || 'Duplicate document detected';
-      }
-      
+      console.error('Upload error:', error);
+      const errorMessage = error.response?.data?.message || 
+                          error.response?.data?.error || 
+                          error.message || 
+                          'Error uploading document';
       setError(errorMessage);
     } finally {
       setUploading(false);
