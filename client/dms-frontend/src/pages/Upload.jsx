@@ -135,8 +135,9 @@ const generateInvoiceNumber = () => {
       
       console.log('✅ Extraction preview successful:', response.data);
       
-      // Generate a random invoice number
-      const generatedInvoiceNumber = generateInvoiceNumber();
+      
+      // Generate a UNIQUE invoice number
+      const generatedInvoiceNumber = generateUniqueInvoiceNumber(formData.vendor_id);
       
       if (response.data.success && response.data.data) {
         const extracted = response.data.data;
@@ -190,7 +191,8 @@ const generateInvoiceNumber = () => {
     } catch (error) {
       console.error('❌ Extraction preview failed:', error);
       // Still generate an invoice number even on error
-      const generatedInvoiceNumber = generateInvoiceNumber();
+      // Still generate an invoice number even on error
+      const generatedInvoiceNumber = generateUniqueInvoiceNumber(formData.vendor_id);
       setFormData(prev => ({
         ...prev,
         invoice_number: generatedInvoiceNumber
@@ -201,41 +203,40 @@ const generateInvoiceNumber = () => {
   };
 
   const handleFileChange = async (e) => {
-    const selectedFile = e.target.files[0];
-    if (selectedFile) {
-      console.log('File selected:', {
-        name: selectedFile.name,
-        size: selectedFile.size,
-        type: selectedFile.type
-      });
-      
-      // Validate file
-      if (selectedFile.size > 10 * 1024 * 1024) {
-        setError('File size must be less than 10MB');
-        return;
-      }
-      
-      const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
-      if (!allowedTypes.includes(selectedFile.type)) {
-        setError('Only PDF, JPEG, and PNG files are allowed');
-        return;
-      }
-      
-      setFile(selectedFile);
-      setError('');
-      
-      // Generate a temporary invoice number immediately
-      const tempInvoiceNumber = generateInvoiceNumber();
-      setFormData(prev => ({
-        ...prev,
-        invoice_number: tempInvoiceNumber
-      }));
-      
-      // Try to extract data and pre-fill form
-      await extractDataFromFile(selectedFile);
+  const selectedFile = e.target.files[0];
+  if (selectedFile) {
+    console.log('File selected:', {
+      name: selectedFile.name,
+      size: selectedFile.size,
+      type: selectedFile.type
+    });
+    
+    // Validate file
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      setError('File size must be less than 10MB');
+      return;
     }
-  };
-
+    
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
+    if (!allowedTypes.includes(selectedFile.type)) {
+      setError('Only PDF, JPEG, and PNG files are allowed');
+      return;
+    }
+    
+    setFile(selectedFile);
+    setError('');
+    
+    // Generate a UNIQUE invoice number using the new function
+    const tempInvoiceNumber = generateUniqueInvoiceNumber(formData.vendor_id);
+    setFormData(prev => ({
+      ...prev,
+      invoice_number: tempInvoiceNumber
+    }));
+    
+    // Try to extract data and pre-fill form
+    await extractDataFromFile(selectedFile);
+  }
+};
   const handleInputChange = (e) => {
     setFormData({
       ...formData,
