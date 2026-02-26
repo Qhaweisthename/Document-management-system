@@ -61,17 +61,6 @@ export default function Upload() {
     }
   };
 
-  useEffect(() => {
-    fetchVendors();
-  }, []);
-
-  // After vendors are fetched, ensure Local Vendor exists
-  useEffect(() => {
-    if (vendors.length > 0) {
-      ensureLocalVendor();
-    }
-  }, [vendors]);
-
   const fetchVendors = async () => {
     try {
       console.log('Fetching vendors...');
@@ -87,6 +76,31 @@ export default function Upload() {
       });
     }
   };
+
+  useEffect(() => {
+    fetchVendors();
+  }, []);
+
+  // ============ SIMPLE FIX: Auto-select Local Vendor when vendors load ============
+  useEffect(() => {
+    if (vendors.length > 0) {
+      const localVendor = vendors.find(v => 
+        v.name.toLowerCase() === 'local vendor'
+      );
+      
+      if (localVendor) {
+        setFormData(prev => ({
+          ...prev,
+          vendor_id: localVendor.id
+        }));
+        console.log('🏠 Default vendor set to: Local Vendor');
+      } else {
+        console.log('⚠️ Local Vendor not found, will try to create it');
+        // Try to create Local Vendor if it doesn't exist
+        ensureLocalVendor();
+      }
+    }
+  }, [vendors]);
 
   // ============ NEW FUNCTION: Generate random invoice number ============
   const generateInvoiceNumber = () => {
@@ -158,104 +172,26 @@ export default function Upload() {
             }));
             setSuccess(`✨ Vendor auto-selected: ${matchedVendor.name}`);
             setTimeout(() => setSuccess(''), 3000);
-          } else {
-            // Vendor extracted but not found in list - prompt to create
-            setNewVendor(prev => ({
-              ...prev,
-              name: extracted.vendor
-            }));
-            // Show a message but don't auto-select
-            setSuccess(`📋 Vendor "${extracted.vendor}" extracted - click "+ New" to add it`);
-            setTimeout(() => setSuccess(''), 4000);
-          }
-        } else {
-          // No vendor extracted, default to "Local Vendor"
-          // First, check if "Local Vendor" exists in the vendors list
-          const localVendor = vendors.find(v => 
-            v.name.toLowerCase() === 'local vendor'
-          );
-          
-          if (localVendor) {
-            // If Local Vendor exists, select it
-            setFormData(prev => ({
-              ...prev,
-              vendor_id: localVendor.id
-            }));
-            setSuccess(`🏠 Defaulted to "Local Vendor" (no vendor detected)`);
-            setTimeout(() => setSuccess(''), 3000);
-          } else {
-            // If Local Vendor doesn't exist, offer to create it
-            setNewVendor(prev => ({
-              ...prev,
-              name: 'Local Vendor',
-              tax_number: '000000000'
-            }));
-            setShowNewVendor(true);
-            setSuccess(`➕ Please create "Local Vendor" as a default option`);
-            setTimeout(() => setSuccess(''), 4000);
           }
         }
-      } else {
-        // Even if extraction fails, still generate an invoice number and default to Local Vendor
+      }
+      
+      // Always ensure we have an invoice number
+      if (!formData.invoice_number) {
         setFormData(prev => ({
           ...prev,
           invoice_number: generatedInvoiceNumber
         }));
-        
-        // Default to "Local Vendor" when extraction fails
-        const localVendor = vendors.find(v => 
-          v.name.toLowerCase() === 'local vendor'
-        );
-        
-        if (localVendor) {
-          setFormData(prev => ({
-            ...prev,
-            vendor_id: localVendor.id
-          }));
-          setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated, defaulted to Local Vendor`);
-        } else {
-          setNewVendor(prev => ({
-            ...prev,
-            name: 'Local Vendor',
-            tax_number: '000000000'
-          }));
-          setShowNewVendor(true);
-          setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated. Please create "Local Vendor"`);
-        }
-        setTimeout(() => setSuccess(''), 3000);
       }
       
     } catch (error) {
       console.error('❌ Extraction preview failed:', error);
-      // Still generate an invoice number even on error and default to Local Vendor
+      // Still generate an invoice number even on error
       const generatedInvoiceNumber = generateInvoiceNumber();
-      
-      // Default to "Local Vendor" on error
-      const localVendor = vendors.find(v => 
-        v.name.toLowerCase() === 'local vendor'
-      );
-      
       setFormData(prev => ({
         ...prev,
         invoice_number: generatedInvoiceNumber
       }));
-      
-      if (localVendor) {
-        setFormData(prev => ({
-          ...prev,
-          vendor_id: localVendor.id
-        }));
-        setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated, defaulted to Local Vendor`);
-      } else {
-        setNewVendor(prev => ({
-          ...prev,
-          name: 'Local Vendor',
-          tax_number: '000000000'
-        }));
-        setShowNewVendor(true);
-        setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated. Please create "Local Vendor"`);
-      }
-      setTimeout(() => setSuccess(''), 3000);
     } finally {
       setExtracting(false);
     }
