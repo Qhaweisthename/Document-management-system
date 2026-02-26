@@ -11,8 +11,12 @@ const {
   createVendor,
   downloadDocument,
   getDocumentWorkflowStatus,
-  deleteDocument
+  deleteDocument,
+  extractPreview  // ← Keep this ONE line, remove the duplicate below
 } = require('../controllers/documentController');
+
+// REMOVE THIS DUPLICATE LINE:
+// const { extractPreview } = require('../controllers/documentController');
 
 // Validation
 const documentValidation = [
@@ -45,8 +49,21 @@ router.get('/workflow/:id', protect, getDocumentWorkflowStatus);
 // Get vendors list
 router.get('/vendors', protect, getVendors);
 
-// ============ UPLOAD ROUTES (Admin & Approver only) ============
+// ============ EXTRACT PREVIEW ROUTE ============
+router.post('/extract-preview', 
+  protect,
+  (req, res, next) => {
+    upload(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
+  extractPreview
+);
 
+// ============ UPLOAD ROUTES (Admin & Approver only) ============
 // Upload document
 router.post('/upload', 
   protect, 

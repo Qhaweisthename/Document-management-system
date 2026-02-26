@@ -193,6 +193,88 @@ const uploadDocument = async (req, res) => {
 };
 
 /**
+ * Extract data from document WITHOUT saving (preview)
+ */
+const extractPreview = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    console.log('🔍 Preview extraction for:', req.file.originalname);
+    
+    // Use AI service to extract data
+    const result = await aiExtractionService.extractFromDocument(
+      req.file.path,
+      null // No document ID for preview
+    );
+    
+    // Clean up temp file after extraction
+    try { 
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path); 
+        console.log('🧹 Cleaned up temp file:', req.file.path);
+      }
+    } catch (e) {
+      console.log('Temp file cleanup warning:', e.message);
+    }
+    
+    if (result.success) {
+      // Format the response for the frontend
+      const extractedData = {
+        invoice_number: result.data.invoice_number || '',
+        date: result.data.date || '',
+        amount: result.data.amount || '',
+        vat: result.data.vat || '',
+        vendor: result.data.vendor || ''
+      };
+      
+      console.log('✅ Preview extraction successful:', extractedData);
+      
+      return res.json({
+        success: true,
+        data: extractedData
+      });
+    } else {
+      console.log('⚠️ Preview extraction failed, returning empty data');
+      return res.json({
+        success: false,
+        message: 'Could not extract data automatically',
+        data: {
+          invoice_number: '',
+          date: '',
+          amount: '',
+          vat: '',
+          vendor: ''
+        }
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Preview extraction error:', error);
+    // Clean up temp file on error
+    if (req.file && req.file.path) {
+      try { 
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path); 
+        }
+      } catch (e) {}
+    }
+    return res.status(500).json({ 
+      success: false,
+      message: 'Error extracting data',
+      data: {
+        invoice_number: '',
+        date: '',
+        amount: '',
+        vat: '',
+        vendor: ''
+      }
+    });
+  }
+};
+
+/**
  * Get ALL documents (for viewers, approvers, and admins)
  */
 const getAllDocuments = async (req, res) => {
@@ -709,5 +791,6 @@ module.exports = {
   createVendor,
   downloadDocument,
   getDocumentWorkflowStatus,
-  deleteDocument
+  deleteDocument,
+  extractPreview  // ← ADDED THIS LINE
 };
