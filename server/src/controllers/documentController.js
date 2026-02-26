@@ -43,7 +43,10 @@ const upload = multer({
   fileFilter: fileFilter
 }).single('document'); // 'document' is the field name
 
-// Upload document
+/**
+ * Upload a new document
+ * Only admins and approvers can upload
+ */
 const uploadDocument = async (req, res) => {
   const client = await pool.connect();
   
@@ -163,6 +166,173 @@ const uploadDocument = async (req, res) => {
     });
   } finally {
     client.release();
+  }
+};
+
+/**
+ * Get ALL documents (for viewers, approvers, and admins)
+ * This ensures everyone sees meaningful data
+ */
+const getAllDocuments = async (req, res) => {
+  try {
+    // All roles see ALL documents
+    const result = await pool.query(
+      `SELECT 
+        d.*, 
+        v.name as vendor_name, 
+        u.username as uploaded_by,
+        u.role as uploader_role,
+        (
+          SELECT json_agg(
+            json_build_object(
+              'step', a.step,
+              'status', a.status,
+              'role', a.role,
+              'created_at', a.created_at
+            ) ORDER BY a.step
+          )
+          FROM approvals a
+          WHERE a.document_id = d.id
+        ) as approval_steps,
+        (
+          SELECT step
+          FROM approvals
+          WHERE document_id = d.id AND status = 'pending'
+          ORDER BY step
+          LIMIT 1
+        ) as current_step
+      FROM documents d
+      LEFT JOIN vendors v ON d.vendor_id = v.id
+      LEFT JOIN users u ON d.created_by = u.id
+      ORDER BY d.created_at DESC`
+    );
+
+    // Add workflow status to each document
+    const documentsWithStatus = result.rows.map(doc => {
+      let workflowStatus = 'Unknown';
+      
+      if (doc.status === 'approved') {
+        workflowStatus = 'Fully Approved';
+      } else if (doc.status === 'rejected') {
+        workflowStatus = 'Rejected';
+      } else if (doc.current_step) {
+        const stepLabels = {
+          1: 'Awaiting Reviewer',
+          2: 'Awaiting Manager',
+          3: 'Awaiting Final Approval'
+        };
+        workflowStatus = stepLabels[doc.current_step] || 'In Review';
+      }
+
+      // Parse AI extraction if exists
+      let aiExtraction = null;
+      if (doc.ai_extraction) {
+        try {
+          aiExtraction = typeof doc.ai_extraction === 'string' 
+            ? JSON.parse(doc.ai_extraction) 
+            : doc.ai_extraction;
+        } catch (e) {
+          console.error('Error parsing AI extraction:', e);
+        }
+      }
+
+      // Determine if user can edit this document
+      const canEdit = req.user.role === 'admin' || req.user.id === doc.created_by;
+
+      return {
+        ...doc,
+        workflow_status: workflowStatus,
+        ai_extraction: aiExtraction,
+        can_edit: canEdit,
+        can_delete: req.user.role === 'admin' // Only admins can delete
+      };
+    });
+
+    res.json({ documents: documentsWithStatus });
+  } catch (error) {
+    console.error('Error fetching all documents:', error);
+    res.status(500).json({ message: 'Error fetching documents' });
+  }
+};
+
+/**
+ * Get only the current user's uploads
+ * Useful for "My Documents" view
+ */
+const getMyUploads = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        d.*, 
+        v.name as vendor_name, 
+        u.username as uploaded_by,
+        (
+          SELECT json_agg(
+            json_build_object(
+              'step', a.step,
+              'status', a.status,
+              'role', a.role,
+              'created_at', a.created_at
+            ) ORDER BY a.step
+          )
+          FROM approvals a
+          WHERE a.document_id = d.id
+        ) as approval_steps,
+        (
+          SELECT step
+          FROM approvals
+          WHERE document_id = d.id AND status = 'pending'
+          ORDER BY step
+          LIMIT 1
+        ) as current_step
+       FROM documents d
+       LEFT JOIN vendors v ON d.vendor_id = v.id
+       LEFT JOIN users u ON d.created_by = u.id
+       WHERE d.created_by = $1
+       ORDER BY d.created_at DESC`,
+      [req.user.id]
+    );
+
+    // Add workflow status to each document
+    const documentsWithStatus = result.rows.map(doc => {
+      let workflowStatus = 'Unknown';
+      
+      if (doc.status === 'approved') {
+        workflowStatus = 'Fully Approved';
+      } else if (doc.status === 'rejected') {
+        workflowStatus = 'Rejected';
+      } else if (doc.current_step) {
+        const stepLabels = {
+          1: 'Awaiting Reviewer',
+          2: 'Awaiting Manager',
+          3: 'Awaiting Final Approval'
+        };
+        workflowStatus = stepLabels[doc.current_step] || 'In Review';
+      }
+
+      // Parse AI extraction if exists
+      let aiExtraction = null;
+      if (doc.ai_extraction) {
+        try {
+          aiExtraction = typeof doc.ai_extraction === 'string' 
+            ? JSON.parse(doc.ai_extraction) 
+            : doc.ai_extraction;
+        } catch (e) {
+          console.error('Error parsing AI extraction:', e);
+        }
+      }
+
+      return {
+        ...doc,
+        workflow_status: workflowStatus,
+        ai_extraction: aiExtraction
+      };
+    });
+
+    res.json({ documents: documentsWithStatus });
+  } catch (error) {
+    console.error('Error fetching my uploads:', error);
+    res.status(500).json({ message: 'Error fetching uploads' });
   }
 };
 
@@ -402,85 +572,7 @@ const createVendor = async (req, res) => {
   }
 };
 
-// Get user's uploads (with approval status)
-const getUserUploads = async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT 
-        d.*, 
-        v.name as vendor_name, 
-        u.username as uploaded_by,
-        (
-          SELECT json_agg(
-            json_build_object(
-              'step', a.step,
-              'status', a.status,
-              'role', a.role,
-              'created_at', a.created_at
-            ) ORDER BY a.step
-          )
-          FROM approvals a
-          WHERE a.document_id = d.id
-        ) as approval_steps,
-        (
-          SELECT step
-          FROM approvals
-          WHERE document_id = d.id AND status = 'pending'
-          ORDER BY step
-          LIMIT 1
-        ) as current_step
-       FROM documents d
-       LEFT JOIN vendors v ON d.vendor_id = v.id
-       LEFT JOIN users u ON d.created_by = u.id
-       WHERE d.created_by = $1
-       ORDER BY d.created_at DESC`,
-      [req.user.id]
-    );
-
-    // Add workflow status to each document
-    const documentsWithStatus = result.rows.map(doc => {
-      let workflowStatus = 'Unknown';
-      
-      if (doc.status === 'approved') {
-        workflowStatus = 'Fully Approved';
-      } else if (doc.status === 'rejected') {
-        workflowStatus = 'Rejected';
-      } else if (doc.current_step) {
-        const stepLabels = {
-          1: 'Awaiting Reviewer',
-          2: 'Awaiting Manager',
-          3: 'Awaiting Final Approval'
-        };
-        workflowStatus = stepLabels[doc.current_step] || 'In Review';
-      }
-
-      // Parse AI extraction if exists
-      let aiExtraction = null;
-      if (doc.ai_extraction) {
-        try {
-          aiExtraction = typeof doc.ai_extraction === 'string' 
-            ? JSON.parse(doc.ai_extraction) 
-            : doc.ai_extraction;
-        } catch (e) {
-          console.error('Error parsing AI extraction:', e);
-        }
-      }
-
-      return {
-        ...doc,
-        workflow_status: workflowStatus,
-        ai_extraction: aiExtraction
-      };
-    });
-
-    res.json({ documents: documentsWithStatus });
-  } catch (error) {
-    console.error('Error fetching uploads:', error);
-    res.status(500).json({ message: 'Error fetching uploads' });
-  }
-};
-
-// Download document
+// Download document (all roles can download)
 const downloadDocument = async (req, res) => {
   try {
     const { id } = req.params;
@@ -501,13 +593,15 @@ const downloadDocument = async (req, res) => {
       return res.status(404).json({ message: 'File not found on server' });
     }
 
-    // Log download
+    // Log download with role info
     await pool.query(
       `INSERT INTO document_logs (document_id, log_type, details) 
        VALUES ($1, 'info', $2)`,
       [id, JSON.stringify({
         action: 'download',
         userId: req.user.id,
+        userRole: req.user.role,
+        username: req.user.username,
         timestamp: new Date()
       })]
     );
@@ -519,7 +613,7 @@ const downloadDocument = async (req, res) => {
   }
 };
 
-// Get document workflow status
+// Get document workflow status (all roles can view)
 const getDocumentWorkflowStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -560,12 +654,57 @@ const getDocumentWorkflowStatus = async (req, res) => {
   }
 };
 
+// Delete document (admin only)
+const deleteDocument = async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const { id } = req.params;
+    
+    // Check if document exists
+    const docResult = await client.query(
+      'SELECT * FROM documents WHERE id = $1',
+      [id]
+    );
+    
+    if (docResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Document not found' });
+    }
+    
+    const document = docResult.rows[0];
+    
+    // Delete the physical file
+    if (fs.existsSync(document.filepath)) {
+      fs.unlinkSync(document.filepath);
+    }
+    
+    // Delete related records (approvals, logs will cascade due to foreign keys)
+    await client.query('DELETE FROM documents WHERE id = $1', [id]);
+    
+    await client.query('COMMIT');
+    
+    res.json({ message: 'Document deleted successfully' });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Delete error:', error);
+    res.status(500).json({ message: 'Error deleting document' });
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   upload,
   uploadDocument,
+  getAllDocuments,
+  getMyUploads,
   getVendors,
   createVendor,
-  getUserUploads,
   downloadDocument,
-  getDocumentWorkflowStatus
+  getDocumentWorkflowStatus,
+  deleteDocument
 };

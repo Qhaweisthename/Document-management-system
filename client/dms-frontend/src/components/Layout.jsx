@@ -18,7 +18,6 @@ export default function Layout({ children }) {
     { path: "/approvals", label: "Approvals", roles: ["admin", "approver"] },
     { path: "/reports", label: "Reports", roles: ["admin", "approver"] },
     { path: "/insights", label: "AI Insights", roles: ["admin", "approver", "viewer"] },
-    { path: "/users", label: "Users", roles: ["admin"] },
   ];
 
   // Filter items based on user role

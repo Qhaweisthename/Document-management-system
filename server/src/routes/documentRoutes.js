@@ -1,4 +1,3 @@
-// server/src/routes/uploadRoutes.js - UPDATE THIS FILE
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');

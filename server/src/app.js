@@ -8,6 +8,9 @@ const approvalRoutes = require('./routes/approvalRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const insightsRoutes = require('./routes/insightsRoutes');
 const aiExtractionRoutes = require('./routes/aiExtractionRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+const documentRoutes = require('./routes/documentRoutes'); // If you created new file
+
 
 
 const app = express();
@@ -32,6 +35,8 @@ app.use('/api/approvals', approvalRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/insights', insightsRoutes);
 app.use('/api/ai-extraction', aiExtractionRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/documents', documentRoutes); // or uploadRoutes
 
 
 
