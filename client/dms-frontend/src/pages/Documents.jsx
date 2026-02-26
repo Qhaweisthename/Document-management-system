@@ -23,7 +23,8 @@ export default function Documents() {
   const fetchDocuments = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/upload/my-uploads');
+      // FIXED: Use /documents/all instead of /upload/my-uploads
+      const response = await api.get('/documents/all');
       setDocuments(response.data.documents);
     } catch (error) {
       console.error('Error fetching documents:', error);
@@ -34,11 +35,11 @@ export default function Documents() {
 
   const handleDownload = async (id, filename) => {
     try {
-      const response = await api.get(`/upload/download/${id}`, {
+      // FIXED: Use /documents/download instead of /upload/download
+      const response = await api.get(`/documents/download/${id}`, {
         responseType: 'blob'
       });
       
-      // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -79,7 +80,7 @@ export default function Documents() {
     <div className="documents-container">
       <div className="documents-header">
         <div>
-          <h2>My Documents</h2>
+          <h2>All Documents</h2>
           <p className="document-count">{documents.length} total documents</p>
         </div>
         

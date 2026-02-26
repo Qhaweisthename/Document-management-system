@@ -40,7 +40,8 @@ export default function Upload() {
 
   const fetchVendors = async () => {
     try {
-      const response = await api.get('/upload/vendors');
+      // FIXED: Use /documents/vendors instead of /upload/vendors
+      const response = await api.get('/documents/vendors');
       setVendors(response.data.vendors);
     } catch (error) {
       console.error('Error fetching vendors:', error);
@@ -50,13 +51,11 @@ export default function Upload() {
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
-      // Check file size (10MB limit)
       if (selectedFile.size > 10 * 1024 * 1024) {
         setError('File size must be less than 10MB');
         return;
       }
       
-      // Check file type
       const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
       if (!allowedTypes.includes(selectedFile.type)) {
         setError('Only PDF, JPEG, and PNG files are allowed');
@@ -85,7 +84,8 @@ export default function Upload() {
   const handleCreateVendor = async (e) => {
     e.preventDefault();
     try {
-      const response = await api.post('/upload/vendors', newVendor);
+      // FIXED: Use /documents/vendors instead of /upload/vendors
+      const response = await api.post('/documents/vendors', newVendor);
       setVendors([...vendors, response.data.vendor]);
       setFormData({ ...formData, vendor_id: response.data.vendor.id });
       setShowNewVendor(false);
@@ -119,7 +119,8 @@ export default function Upload() {
     data.append('invoice_number', formData.invoice_number);
 
     try {
-      const response = await api.post('/upload/document', data, {
+      // FIXED: Use /documents/upload instead of /upload/document
+      const response = await api.post('/documents/upload', data, {
         headers: {
           'Content-Type': 'multipart/form-data'
         },
@@ -134,7 +135,6 @@ export default function Upload() {
       setSuccess('Document uploaded successfully!');
       setUploadProgress(0);
       
-      // Reset form
       setFile(null);
       setFormData({
         vendor_id: '',
@@ -145,7 +145,6 @@ export default function Upload() {
         invoice_number: ''
       });
       
-      // Reset file input
       document.getElementById('file-input').value = '';
       
       setTimeout(() => {
@@ -171,7 +170,6 @@ export default function Upload() {
       {success && <div className="upload-success">{success}</div>}
 
       <form onSubmit={handleSubmit} className="upload-form">
-        {/* File Upload Section */}
         <div className="form-section">
           <h3>Document File</h3>
           <div className="file-upload-area">
@@ -192,7 +190,6 @@ export default function Upload() {
           </div>
         </div>
 
-        {/* Document Details */}
         <div className="form-section">
           <h3>Document Details</h3>
           
@@ -293,7 +290,6 @@ export default function Upload() {
           </div>
         </div>
 
-        {/* Submit Button */}
         <div className="form-actions">
           <button 
             type="submit" 
@@ -317,7 +313,6 @@ export default function Upload() {
         </div>
       </form>
 
-      {/* New Vendor Modal */}
       {showNewVendor && (
         <div className="modal-overlay">
           <div className="modal-content">
