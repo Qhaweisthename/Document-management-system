@@ -59,136 +59,147 @@ export default function Upload() {
     }
   };
 
-  // NEW: Extract data from file before upload
-  // NEW: Extract data from file before upload with auto-generated invoice number
-const extractDataFromFile = async (selectedFile) => {
-  setExtracting(true);
-  setError('');
-  
-  try {
-    console.log('🔍 Attempting to extract data from file before upload...');
+  // ============ NEW FUNCTION: Generate random invoice number ============
+  const generateInvoiceNumber = () => {
+    const prefix = 'INV';
+    const date = new Date();
+    const year = date.getFullYear().toString().slice(-2);
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    const random = Math.floor(Math.random() * 900 + 100); // 100-999
+    return `${prefix}-${year}${month}${day}-${random}`;
+  };
+
+  // Extract data from file before upload with auto-generated invoice number
+  const extractDataFromFile = async (selectedFile) => {
+    setExtracting(true);
+    setError('');
     
-    const extractData = new FormData();
-    extractData.append('document', selectedFile);
-    
-    const response = await api.post('/documents/extract-preview', extractData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    });
-    
-    console.log('✅ Extraction preview successful:', response.data);
-    
-    // Generate a random invoice number
-    const generatedInvoiceNumber = generateInvoiceNumber();
-    
-    if (response.data.success && response.data.data) {
-      const extracted = response.data.data;
+    try {
+      console.log('🔍 Attempting to extract data from file before upload...');
       
-      // Format date if found
-      let formattedDate = extracted.date;
-      if (extracted.date && extracted.date.includes('/')) {
-        const parts = extracted.date.split('/');
-        if (parts.length === 3) {
-          if (parts[2].length === 4) {
-            formattedDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+      const extractData = new FormData();
+      extractData.append('document', selectedFile);
+      
+      const response = await api.post('/documents/extract-preview', extractData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      
+      console.log('✅ Extraction preview successful:', response.data);
+      
+      // Generate a random invoice number
+      const generatedInvoiceNumber = generateInvoiceNumber();
+      
+      if (response.data.success && response.data.data) {
+        const extracted = response.data.data;
+        
+        // Format date if found
+        let formattedDate = extracted.date;
+        if (extracted.date && extracted.date.includes('/')) {
+          const parts = extracted.date.split('/');
+          if (parts.length === 3) {
+            if (parts[2].length === 4) {
+              formattedDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+            }
           }
         }
-      }
-      
-      // Auto-fill the form with extracted data + generated invoice number
-      setFormData(prev => ({
-        ...prev,
-        invoice_number: generatedInvoiceNumber, // ← Use generated number
-        date: formattedDate || prev.date,
-        amount: extracted.amount || prev.amount,
-        vat: extracted.vat || prev.vat,
-      }));
-
-      // Try to auto-select vendor if match found
-      if (extracted.vendor && vendors.length > 0) {
-        const matchedVendor = vendors.find(v => 
-          v.name.toLowerCase().includes(extracted.vendor.toLowerCase()) ||
-          extracted.vendor.toLowerCase().includes(v.name.toLowerCase())
-        );
         
-        if (matchedVendor) {
-          setFormData(prev => ({
-            ...prev,
-            vendor_id: matchedVendor.id
-          }));
-          setSuccess(`✨ Vendor auto-selected: ${matchedVendor.name}`);
-          setTimeout(() => setSuccess(''), 3000);
-        } else {
-          // Option to create new vendor from extracted name
-          setNewVendor(prev => ({
-            ...prev,
-            name: extracted.vendor
-          }));
+        // Auto-fill the form with extracted data + generated invoice number
+        setFormData(prev => ({
+          ...prev,
+          invoice_number: generatedInvoiceNumber,
+          date: formattedDate || prev.date,
+          amount: extracted.amount || prev.amount,
+          vat: extracted.vat || prev.vat,
+        }));
+
+        // Try to auto-select vendor if match found
+        if (extracted.vendor && vendors.length > 0) {
+          const matchedVendor = vendors.find(v => 
+            v.name.toLowerCase().includes(extracted.vendor.toLowerCase()) ||
+            extracted.vendor.toLowerCase().includes(v.name.toLowerCase())
+          );
+          
+          if (matchedVendor) {
+            setFormData(prev => ({
+              ...prev,
+              vendor_id: matchedVendor.id
+            }));
+            setSuccess(`✨ Vendor auto-selected: ${matchedVendor.name}`);
+            setTimeout(() => setSuccess(''), 3000);
+          } else {
+            // Option to create new vendor from extracted name
+            setNewVendor(prev => ({
+              ...prev,
+              name: extracted.vendor
+            }));
+          }
         }
+        
+        setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated automatically`);
+        setTimeout(() => setSuccess(''), 3000);
+      } else {
+        // Even if extraction fails, still generate an invoice number
+        setFormData(prev => ({
+          ...prev,
+          invoice_number: generatedInvoiceNumber
+        }));
+        setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated automatically`);
+        setTimeout(() => setSuccess(''), 3000);
       }
       
-      setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated automatically`);
-      setTimeout(() => setSuccess(''), 3000);
-    } else {
-      // Even if extraction fails, still generate an invoice number
+    } catch (error) {
+      console.error('❌ Extraction preview failed:', error);
+      // Still generate an invoice number even on error
+      const generatedInvoiceNumber = generateInvoiceNumber();
       setFormData(prev => ({
         ...prev,
         invoice_number: generatedInvoiceNumber
       }));
       setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated automatically`);
       setTimeout(() => setSuccess(''), 3000);
+    } finally {
+      setExtracting(false);
     }
-    
-  } catch (error) {
-    console.error('❌ Extraction preview failed:', error);
-    // Still generate an invoice number even on error
-    const generatedInvoiceNumber = generateInvoiceNumber();
-    setFormData(prev => ({
-      ...prev,
-      invoice_number: generatedInvoiceNumber
-    }));
-    setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated automatically`);
-    setTimeout(() => setSuccess(''), 3000);
-  } finally {
-    setExtracting(false);
-  }
-};
+  };
+
   const handleFileChange = async (e) => {
-  const selectedFile = e.target.files[0];
-  if (selectedFile) {
-    console.log('File selected:', {
-      name: selectedFile.name,
-      size: selectedFile.size,
-      type: selectedFile.type
-    });
-    
-    // Validate file
-    if (selectedFile.size > 10 * 1024 * 1024) {
-      setError('File size must be less than 10MB');
-      return;
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      console.log('File selected:', {
+        name: selectedFile.name,
+        size: selectedFile.size,
+        type: selectedFile.type
+      });
+      
+      // Validate file
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        setError('File size must be less than 10MB');
+        return;
+      }
+      
+      const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
+      if (!allowedTypes.includes(selectedFile.type)) {
+        setError('Only PDF, JPEG, and PNG files are allowed');
+        return;
+      }
+      
+      setFile(selectedFile);
+      setError('');
+      
+      // Generate a temporary invoice number immediately
+      const tempInvoiceNumber = generateInvoiceNumber();
+      setFormData(prev => ({
+        ...prev,
+        invoice_number: tempInvoiceNumber
+      }));
+      
+      // Try to extract data and pre-fill form
+      await extractDataFromFile(selectedFile);
     }
-    
-    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
-    if (!allowedTypes.includes(selectedFile.type)) {
-      setError('Only PDF, JPEG, and PNG files are allowed');
-      return;
-    }
-    
-    setFile(selectedFile);
-    setError('');
-    
-    // Generate a temporary invoice number immediately
-    const tempInvoiceNumber = generateInvoiceNumber();
-    setFormData(prev => ({
-      ...prev,
-      invoice_number: tempInvoiceNumber
-    }));
-    
-    // Try to extract data and pre-fill form
-    await extractDataFromFile(selectedFile);
-  }
-};
+  };
 
   const handleInputChange = (e) => {
     setFormData({
@@ -419,7 +430,7 @@ const extractDataFromFile = async (selectedFile) => {
                 disabled={extracting}
                 className={formData.invoice_number && !extracting ? 'auto-filled' : ''}
               />
-              {formData.invoice_number && !extracting && <span className="auto-fill-badge">AI</span>}
+              {formData.invoice_number && !extracting && <span className="auto-fill-badge">Auto</span>}
             </div>
 
             <div className="form-group">
