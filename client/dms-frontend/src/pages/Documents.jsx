@@ -10,7 +10,7 @@ export default function Documents() {
   const { user } = useAuth();
 
   const api = axios.create({
-    baseURL: 'http://localhost:5000/api',
+    baseURL: `${import.meta.env.VITE_API_URL}/api`,
     headers: {
       'Authorization': `Bearer ${localStorage.getItem('token')}`
     }
