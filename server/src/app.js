@@ -9,37 +9,29 @@ const reportRoutes = require('./routes/reportRoutes');
 const insightsRoutes = require('./routes/insightsRoutes');
 const aiExtractionRoutes = require('./routes/aiExtractionRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
-const documentRoutes = require('./routes/documentRoutes'); // If you created new file
+const documentRoutes = require('./routes/documentRoutes');
 
 const app = express();
 
 // ============ FIXED CORS CONFIGURATION ============
 // Allow ALL origins with credentials support
 app.use(cors({
-  origin: true, // This reflects the requesting origin
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept']
-}));
-
-// Handle preflight requests for all routes
-app.options('*', cors({
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept']
 }));
 
-// ============ ADDITIONAL CORS HEADERS MIDDLEWARE (Backup) ============
+// ============ SIMPLIFIED OPTIONS HANDLER ============
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, X-Requested-With, Accept');
   
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
+    return res.status(200).end();
   }
   next();
 });
@@ -55,7 +47,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/insights', insightsRoutes);
 app.use('/api/ai-extraction', aiExtractionRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/documents', documentRoutes); // or uploadRoutes
+app.use('/api/documents', documentRoutes);
 
 // Test route
 app.get('/', (req, res) => {
