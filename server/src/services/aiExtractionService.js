@@ -39,7 +39,7 @@ class AIExtractionService {
       
       // Return mock data so the upload still works
       return {
-        success: true,
+        success: false,
         data: {
           invoice_number: `MOCK-${Date.now()}`,
           date: new Date().toISOString().split('T')[0],
@@ -85,37 +85,35 @@ class AIExtractionService {
       };
 
     } catch (error) {
-      console.error('AI Extraction error:', error);
-      
-      // Log failure but DON'T crash
-      try {
-        await pool.query(
-          `INSERT INTO document_logs (document_id, log_type, details) 
-           VALUES ($1, 'extraction_issue', $2)`,
-          [documentId, JSON.stringify({
-            error: error.message,
-            timestamp: new Date()
-          })]
-        );
-      } catch (logError) {
-        console.error('Failed to log extraction error:', logError);
-      }
+  console.error('AI Extraction error:', error);
+  
+  // Log failure but DON'T crash
+  try {
+    await pool.query(
+      `INSERT INTO document_logs (document_id, log_type, details) 
+       VALUES ($1, 'extraction_issue', $2)`,
+      [documentId, JSON.stringify({
+        error: error.message,
+        timestamp: new Date()
+      })]
+    );
+  } catch (logError) {
+    console.error('Failed to log extraction error:', logError);
+  }
 
-      // Return mock data instead of failing
-      return {
-        success: true,
-        data: {
-          invoice_number: `ERROR-${Date.now()}`,
-          date: new Date().toISOString().split('T')[0],
-          amount: '0.00',
-          vat: '0.00',
-          vendor: 'Extraction Failed'
-        },
-        confidence: 0.5,
-        text: 'Extraction failed - using mock data',
-        mock: true
-      };
-    }
+  // IMPORTANT CHANGE: Return success: false so frontend knows to use defaults
+  return {
+    success: false,  // Changed from true to false
+    data: {
+      invoice_number: '',
+      date: '',
+      amount: '',
+      vat: '',
+      vendor: ''
+    },
+    error: error.message
+  };
+}
   }
 
   parseExtractedText(text) {

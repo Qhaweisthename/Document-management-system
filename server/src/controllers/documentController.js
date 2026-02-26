@@ -219,36 +219,36 @@ const extractPreview = async (req, res) => {
       console.log('Temp file cleanup warning:', e.message);
     }
     
-    if (result.success) {
-      // Format the response for the frontend
-      const extractedData = {
-        invoice_number: result.data.invoice_number || '',
-        date: result.data.date || '',
-        amount: result.data.amount || '',
-        vat: result.data.vat || '',
-        vendor: result.data.vendor || ''
+    // ALWAYS return a structured response, even on failure
+    let extractedData = {
+      invoice_number: '',
+      date: '',
+      amount: '',
+      vat: '',
+      vendor: ''
+    };
+    
+    let success = false;
+    
+    if (result && result.success) {
+      success = true;
+      extractedData = {
+        invoice_number: result.data?.invoice_number || '',
+        date: result.data?.date || '',
+        amount: result.data?.amount || '',
+        vat: result.data?.vat || '',
+        vendor: result.data?.vendor || ''
       };
-      
       console.log('✅ Preview extraction successful:', extractedData);
-      
-      return res.json({
-        success: true,
-        data: extractedData
-      });
     } else {
-      console.log('⚠️ Preview extraction failed, returning empty data');
-      return res.json({
-        success: false,
-        message: 'Could not extract data automatically',
-        data: {
-          invoice_number: '',
-          date: '',
-          amount: '',
-          vat: '',
-          vendor: ''
-        }
-      });
+      console.log('⚠️ Preview extraction failed or returned no data');
     }
+    
+    // Always return 200 with success flag - never let the frontend crash
+    return res.status(200).json({
+      success: success,
+      data: extractedData
+    });
     
   } catch (error) {
     console.error('❌ Preview extraction error:', error);
@@ -260,9 +260,9 @@ const extractPreview = async (req, res) => {
         }
       } catch (e) {}
     }
-    return res.status(500).json({ 
+    // Return 200 with empty data instead of 500 to prevent frontend crashes
+    return res.status(200).json({ 
       success: false,
-      message: 'Error extracting data',
       data: {
         invoice_number: '',
         date: '',
