@@ -398,4 +398,38 @@
     padding: 14px;
     font-size: 15px;
   }
+
+  /* Add to your Upload.css */
+.vendor-auto-fill-info {
+  margin-top: 5px;
+  padding: 8px 12px;
+  background-color: #f0f9ff;
+  border-left: 3px solid #3b82f6;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #1e40af;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vendor-auto-fill-info .vendor-name {
+  font-weight: 600;
+  color: #1e3a8a;
+}
+
+.vendor-auto-fill-info button {
+  margin-left: auto;
+  padding: 4px 10px;
+  background-color: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vendor-auto-fill-info button:hover {
+  background-color: #2563eb;
+}
 }
