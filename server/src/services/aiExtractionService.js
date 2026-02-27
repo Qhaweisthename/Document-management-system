@@ -5,7 +5,8 @@ const pool = require('../config/db');
 
 class AIExtractionService {
   constructor() {
-    this.disabled = false;
+    this.useMock = false;
+    this.client = null;
     
     // Try to initialize Google Vision
     try {
@@ -22,71 +23,76 @@ class AIExtractionService {
           credentials: credentials
         });
         console.log('✅ Google Cloud Vision client initialized successfully');
+        console.log('🎯 REAL AI EXTRACTION ENABLED');
       } else {
-        console.warn('⚠️ No Google credentials found, using mock extraction');
+        console.warn('⚠️ No Google credentials found, will use mock extraction');
         this.useMock = true;
       }
     } catch (error) {
       console.error('❌ Failed to initialize Google Cloud Vision:', error.message);
+      console.error('❌ Will use mock extraction instead');
       this.useMock = true;
     }
   }
 
   async extractFromDocument(filePath, documentId) {
-    // Always return data - never fail
     try {
       console.log(`🔍 Extracting data from document: ${filePath}`);
 
-      // If using mock or no client, return realistic mock data
-      if (this.useMock || !this.client) {
-        console.log('📊 Using mock extraction data');
-        return this.getMockData();
-      }
-
+      // Check if file exists
       if (!fs.existsSync(filePath)) {
         console.log('📁 File not found, using mock data');
         return this.getMockData();
       }
 
-      const fileContent = fs.readFileSync(filePath);
-      
-      const [result] = await this.client.documentTextDetection({
-        image: { content: fileContent.toString('base64') }
-      });
+      // If we have a real client, try REAL extraction first
+      if (this.client && !this.useMock) {
+        console.log('🎯 Attempting REAL Google Cloud Vision extraction...');
+        
+        try {
+          const fileContent = fs.readFileSync(filePath);
+          
+          const [result] = await this.client.documentTextDetection({
+            image: { content: fileContent.toString('base64') }
+          });
 
-      const fullTextAnnotation = result.fullTextAnnotation;
-      
-      if (!fullTextAnnotation) {
-        console.log('📄 No text detected, using mock data');
-        return this.getMockData();
+          const fullTextAnnotation = result.fullTextAnnotation;
+          
+          if (fullTextAnnotation && fullTextAnnotation.text) {
+            console.log('✅ REAL extraction successful - text detected');
+            console.log('📄 Extracted text sample:', fullTextAnnotation.text.substring(0, 200));
+            
+            const extractedData = this.parseExtractedText(fullTextAnnotation.text);
+            const confidence = this.calculateConfidence(result);
+            
+            console.log('📊 REAL extracted data:', extractedData);
+            
+            if (documentId) {
+              await this.storeExtractionResults(documentId, extractedData, confidence, fullTextAnnotation);
+            }
+
+            return {
+              success: true,
+              data: extractedData,
+              confidence,
+              text: fullTextAnnotation.text,
+              real: true
+            };
+          } else {
+            console.log('⚠️ No text detected in document');
+          }
+        } catch (visionError) {
+          console.error('❌ Google Vision API error:', visionError.message);
+          console.log('⚠️ Falling back to mock data');
+        }
       }
 
-      const extractedData = this.parseExtractedText(fullTextAnnotation.text);
-      const confidence = this.calculateConfidence(result);
-      
-      if (documentId) {
-        await this.storeExtractionResults(documentId, extractedData, confidence, fullTextAnnotation);
-      }
-
-      // If extraction returned empty fields, fill with mock data
-      const finalData = {
-        invoice_number: extractedData.invoice_number || this.generateInvoiceNumber(),
-        date: extractedData.date || this.getTodayDate(),
-        amount: extractedData.amount || (Math.random() * 1000).toFixed(2),
-        vat: extractedData.vat || (Math.random() * 150).toFixed(2),
-        vendor: extractedData.vendor || this.getRandomVendor()
-      };
-
-      return {
-        success: true,
-        data: finalData,
-        confidence,
-        text: fullTextAnnotation.text
-      };
+      // Fall back to mock data
+      console.log('📊 Using mock extraction data');
+      return this.getMockData();
 
     } catch (error) {
       console.error('AI Extraction error:', error);
-      // ALWAYS return mock data on error
       return this.getMockData();
     }
   }
@@ -133,12 +139,37 @@ class AIExtractionService {
       vendor: null
     };
 
+    // More comprehensive patterns for invoice fields
     const patterns = {
-      invoice_number: [/INVOICE\s*#?\s*[:\s]*([A-Z0-9\-/]+)/i, /INV-\d+/i],
-      date: [/DATE\s*[:\s]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i],
-      amount: [/TOTAL\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i],
-      vat: [/VAT\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i],
-      vendor: [/FROM\s*[:\s]*([A-Za-z\s&]+)/i, /VENDOR\s*[:\s]*([A-Za-z\s&]+)/i]
+      invoice_number: [
+        /INVOICE\s*#?\s*[:\s]*([A-Z0-9\-/]+)/i,
+        /INVOICE\s*N[O°]\.?\s*[:\s]*([A-Z0-9\-/]+)/i,
+        /INV-\d+/i,
+        /INVOICE\s*(\d+)/
+      ],
+      date: [
+        /DATE\s*[:\s]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+        /INVOICE\s*DATE\s*[:\s]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+        /(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/,
+        /(\d{1,2}\s+[A-Za-z]+\s+\d{4})/
+      ],
+      amount: [
+        /TOTAL\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i,
+        /AMOUNT\s*DUE\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i,
+        /GRAND\s*TOTAL\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i,
+        /TOTAL\s*AMOUNT\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i
+      ],
+      vat: [
+        /VAT\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i,
+        /TAX\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i,
+        /VAT\s*AMOUNT\s*[:\s]*[$€£]?\s*([\d,]+\.?\d*)/i
+      ],
+      vendor: [
+        /^([A-Za-z\s&]+(?:\n|$))/m,
+        /FROM\s*[:\s]*([A-Za-z\s&]+)/i,
+        /VENDOR\s*[:\s]*([A-Za-z\s&]+)/i,
+        /SUPPLIER\s*[:\s]*([A-Za-z\s&]+)/i
+      ]
     };
 
     for (const [field, fieldPatterns] of Object.entries(patterns)) {

@@ -63,4 +63,24 @@ router.get('/status/:documentId', protect, async (req, res) => {
   }
 });
 
+// Add this temporary test endpoint
+router.get('/test-credentials', protect, async (req, res) => {
+  try {
+    const service = new AIExtractionService();
+    if (service.useMock) {
+      res.json({ 
+        status: '⚠️ Using MOCK data', 
+        message: 'Google Cloud Vision is NOT initialized. Check your credentials.' 
+      });
+    } else {
+      res.json({ 
+        status: '✅ Google Cloud Vision is working', 
+        message: 'Real AI extraction enabled' 
+      });
+    }
+  } catch (error) {
+    res.json({ status: '❌ Error', error: error.message });
+  }
+});
+
 module.exports = router;
