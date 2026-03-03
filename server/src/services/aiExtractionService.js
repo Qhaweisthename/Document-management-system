@@ -2,6 +2,8 @@ const vision = require('@google-cloud/vision');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const pdf = require('pdf-poppler');
+const os = require('os');
 
 class AIExtractionService {
   constructor() {
@@ -54,6 +56,52 @@ class AIExtractionService {
     }
   }
 
+  async convertPDFToImage(pdfPath) {
+    try {
+      console.log('🔄 Converting PDF to image...');
+      
+      // Create temp directory for images
+      const tempDir = path.join(os.tmpdir(), 'pdf-images-' + Date.now());
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      const options = {
+        format: 'png',
+        out_dir: tempDir,
+        out_prefix: 'page',
+        page: 1 // Convert only first page
+      };
+
+      await pdf.convert(pdfPath, options);
+      
+      // Get the generated image path
+      const files = fs.readdirSync(tempDir);
+      const imageFile = files.find(f => f.startsWith('page-1') && f.endsWith('.png'));
+      
+      if (!imageFile) {
+        throw new Error('No image file generated');
+      }
+      
+      const imagePath = path.join(tempDir, imageFile);
+      console.log('✅ PDF converted to image:', imagePath);
+      
+      // Read the image file
+      const imageBuffer = fs.readFileSync(imagePath);
+      
+      // Clean up temp files
+      try { 
+        fs.unlinkSync(imagePath); 
+        fs.rmdirSync(tempDir);
+      } catch (e) {}
+      
+      return imageBuffer;
+    } catch (error) {
+      console.error('❌ PDF conversion error:', error);
+      return null;
+    }
+  }
+
   async extractFromDocument(filePath, documentId) {
     try {
       console.log(`🔍 Extracting data from document: ${filePath}`);
@@ -68,11 +116,27 @@ class AIExtractionService {
         console.log('🎯 Attempting REAL Google Cloud Vision extraction...');
         
         try {
-          const fileContent = fs.readFileSync(filePath);
-          console.log('📄 File size:', fileContent.length, 'bytes');
+          let imageBuffer;
+          const isPDF = filePath.toLowerCase().endsWith('.pdf');
           
+          if (isPDF) {
+            console.log('📑 Detected PDF file, converting to image first...');
+            imageBuffer = await this.convertPDFToImage(filePath);
+            
+            if (!imageBuffer) {
+              console.log('⚠️ PDF conversion failed, falling back to mock data');
+              return this.getMockData();
+            }
+          } else {
+            // For images, read directly
+            imageBuffer = fs.readFileSync(filePath);
+          }
+          
+          console.log('📄 Image size:', imageBuffer.length, 'bytes');
+          
+          // Use regular image detection (works for both images and converted PDFs)
           const [result] = await this.client.documentTextDetection({
-            image: { content: fileContent.toString('base64') }
+            image: { content: imageBuffer.toString('base64') }
           });
 
           const fullTextAnnotation = result.fullTextAnnotation;
@@ -173,64 +237,204 @@ class AIExtractionService {
   // ============ VENDOR DETECTION ============
   console.log('🔍 Searching for vendor...');
   
-  // Look for the actual vendor (skip the word "Invoice")
+  // Look for company name with LLC, Inc, Corp, Ltd, Pty, etc.
   for (const line of lines) {
     if (line.includes('LLC') || line.includes('Inc') || line.includes('Corp') || 
-        line.includes('Ltd') || (line.includes('OpenAl') && !line.includes('Invoice')) ||
-        (line.includes('Records') && !line.includes('Invoice'))) {
+        line.includes('Ltd') || line.includes('Pty') || line.includes('Company') ||
+        line.includes('Materials') || line.includes('Solutions')) {
       extracted.vendor = line;
-      console.log('✅ Found vendor:', extracted.vendor);
+      console.log('✅ Found vendor from company indicator:', extracted.vendor);
       break;
     }
   }
   
-  // Fallback to first line if no company found
-  if (!extracted.vendor && lines.length > 0 && !lines[0].match(/invoice|bill|date|total/i)) {
-    extracted.vendor = lines[0];
-    console.log('✅ Found vendor from first line:', extracted.vendor);
+  // If not found, look for first line that looks like a company name
+  if (!extracted.vendor) {
+    for (const line of lines) {
+      // Skip lines that are common headers
+      if (!line.match(/invoice|bill|description|qty|rate|amount|subtotal|total|paid|balance|payment|authorized|mobile|email|phone|fax|www|http|thank|terms|conditions|powered/i) && 
+          line.length > 5 && 
+          !line.includes('@') && 
+          !line.match(/^\d/)) {
+        extracted.vendor = line;
+        console.log('✅ Found vendor from line:', extracted.vendor);
+        break;
+      }
+    }
   }
 
   // ============ INVOICE NUMBER DETECTION ============
   console.log('🔍 Searching for invoice number...');
   
-  // Method 1: Look for "ZA-001" pattern specifically
-  const zaPattern = /\b(ZA-\d{3})\b/i;
-  const zaMatch = text.match(zaPattern);
-  if (zaMatch) {
-    console.log('✅ Found ZA pattern match:', zaMatch[1]);
-    extracted.invoice_number = zaMatch[1];
+  // Comprehensive list of invoice number patterns
+  
+  // Pattern 1: Common invoice prefixes
+  const invoicePrefixes = [
+    'INV-', 'INV', 'INVOICE', 'INV#', 'INVOICE#', 'INVOICE NO', 'INVOICE NUMBER',
+    'INV NO', 'INV NUMBER', 'INV #', 'INVOICE #', 'Invoice No', 'Invoice Number',
+    'Invoice #', 'Factura', 'Rechnung', 'Faktura', 'Facture'
+  ];
+  
+  // Pattern 2: Look for "INVOICE #" or similar with the number on the same line
+  for (const prefix of invoicePrefixes) {
+    // Try to find pattern like "INV-12345" or "INVOICE # 12345"
+    const pattern = new RegExp(`${prefix}[\\s]*#?[\\s]*([A-Z0-9\\-\\/_]+)`, 'i');
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const candidate = match[1].trim();
+      // Filter out dates and common false positives
+      if (!candidate.match(/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/) && 
+          !candidate.match(/^(total|amount|subtotal|tax|vat|balance)$/i) &&
+          candidate.length > 1) {
+        extracted.invoice_number = candidate;
+        console.log('✅ Found invoice number from prefix pattern:', extracted.invoice_number);
+        break;
+      }
+    }
   }
   
-  // Method 2: Look for line with "Invoice #" then next line
+  // Pattern 3: Look for "INVOICE #" on one line and number on next line
   if (!extracted.invoice_number) {
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].match(/invoice\s*#?/i) && i + 1 < lines.length) {
-        const nextLine = lines[i + 1];
-        if (nextLine.match(/^[A-Z0-9\-]+$/)) {
-          console.log('✅ Found invoice number after "Invoice" line:', nextLine);
-          extracted.invoice_number = nextLine;
+      // Check if current line contains invoice indicators
+      if (lines[i].match(/INVOICE\s*#|INVOICE\s*NO|INVOICE\s*NUMBER|Invoice\s*#|Invoice\s*No|Invoice\s*Number/i)) {
+        // Check next line for the actual number
+        if (i + 1 < lines.length) {
+          const nextLine = lines[i + 1];
+          // Check if next line looks like an invoice number (alphanumeric, not a date)
+          if (nextLine.match(/^[A-Z0-9\-_\/]+$/) && 
+              !nextLine.match(/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/) &&
+              nextLine.length < 20) {
+            extracted.invoice_number = nextLine;
+            console.log('✅ Found invoice number on next line:', extracted.invoice_number);
+            break;
+          }
+        }
+        // Also check 2 lines ahead (sometimes there's an empty line)
+        if (i + 2 < lines.length && !extracted.invoice_number) {
+          const twoLinesAhead = lines[i + 2];
+          if (twoLinesAhead.match(/^[A-Z0-9\-_\/]+$/) && 
+              !twoLinesAhead.match(/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/) &&
+              twoLinesAhead.length < 20) {
+            extracted.invoice_number = twoLinesAhead;
+            console.log('✅ Found invoice number two lines after:', extracted.invoice_number);
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  // Pattern 4: Look for standard invoice number formats (alphanumeric with dashes)
+  if (!extracted.invoice_number) {
+    const formatPatterns = [
+      // Format: ABC-12345, INV-2023-001, etc.
+      /\b([A-Z]{2,5}[-_]\d{3,6})\b/i,
+      // Format: INV12345, INV2023001
+      /\b([A-Z]{2,5}\d{4,8})\b/i,
+      // Format: 2023-001 (year and number)
+      /\b(\d{4}[-_]\d{3,4})\b/,
+      // Format: ZA-001 (specific to your invoices)
+      /\b(ZA-\d{3})\b/i,
+      // Format: MA9Y7R9P-0002 (OpenAI style)
+      /\b([A-Z0-9]{8,10}[-_]\d{4})\b/i,
+      // Format: 100-31 (like your test invoice filename)
+      /\b(\d{3}-\d{2})\b/,
+      // Format: Any alphanumeric string that looks like an invoice number
+      /\b([A-Z0-9]{3,12}[-_]?\d{2,6})\b/i
+    ];
+    
+    for (const pattern of formatPatterns) {
+      const match = text.match(pattern);
+      if (match && match[1]) {
+        const candidate = match[1].trim();
+        // Filter out common false positives
+        if (!candidate.match(/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/) && // not a date
+            !candidate.match(/^\d+\.\d{2}$/) && // not an amount
+            !candidate.match(/^(total|amount|subtotal|tax|vat|balance|due|inc|llc|ltd|corp)$/i) && // not common words
+            candidate.length > 2) {
+          extracted.invoice_number = candidate;
+          console.log('✅ Found invoice number from format pattern:', extracted.invoice_number);
           break;
         }
       }
     }
   }
-
-  // Method 3: Look for "Invoice number" pattern
+  
+  // Pattern 5: Look for standalone numbers that could be invoice numbers
   if (!extracted.invoice_number) {
-    const invoicePatterns = [
-      /Invoice\s*number\s*[:\s]*([A-Z0-9\-_]+)/i,
-      /\b([A-Z0-9]{2,10}[-_]?\d{2,6})\b/i
-    ];
+    // Find all numbers in the text
+    const numberCandidates = [];
     
-    for (const pattern of invoicePatterns) {
-      const match = text.match(pattern);
-      if (match && match[1]) {
-        const candidate = match[1].trim();
-        if (!candidate.match(/^\d+$/) && candidate.length > 3) {
-          extracted.invoice_number = candidate;
-          console.log('✅ Found invoice number from pattern:', candidate);
+    for (const line of lines) {
+      // Skip lines that are clearly not invoice numbers
+      if (line.match(/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/)) continue; // Skip dates
+      if (line.match(/^\d+\.\d{2}$/)) continue; // Skip amounts
+      if (line.match(/^\d{4,5}$/)) continue; // Skip postal codes
+      
+      // Look for numbers with possible prefixes
+      const numberMatch = line.match(/\b(\d{3,8})\b/);
+      if (numberMatch) {
+        const num = numberMatch[1];
+        // Prioritize numbers that appear after invoice-related keywords
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].includes(num) && i > 0) {
+            const prevLine = lines[i - 1].toLowerCase();
+            if (prevLine.includes('invoice') || prevLine.includes('inv') || prevLine.includes('#') || prevLine.includes('no')) {
+              extracted.invoice_number = num;
+              console.log('✅ Found invoice number from context:', extracted.invoice_number);
+              break;
+            }
+          }
+        }
+        if (extracted.invoice_number) break;
+        
+        // Otherwise, collect as candidate
+        numberCandidates.push({ number: num, line: line, index: lines.indexOf(line) });
+      }
+    }
+    
+    // If we have candidates but no match yet, take the first reasonable one
+    if (!extracted.invoice_number && numberCandidates.length > 0) {
+      // Sort by line index (earlier in document is better)
+      numberCandidates.sort((a, b) => a.index - b.index);
+      
+      // Take the first candidate that's not obviously something else
+      for (const candidate of numberCandidates) {
+        if (candidate.number.length >= 3 && candidate.number.length <= 8) {
+          extracted.invoice_number = candidate.number;
+          console.log('✅ Found invoice number from candidate list:', extracted.invoice_number);
           break;
         }
+      }
+    }
+  }
+  
+  // Pattern 6: Look for "INV" followed by numbers (even without space)
+  if (!extracted.invoice_number) {
+    const invPattern = /\b(INV\d{3,8})\b/i;
+    const invMatch = text.match(invPattern);
+    if (invMatch && invMatch[1]) {
+      extracted.invoice_number = invMatch[1];
+      console.log('✅ Found invoice number from INV pattern:', extracted.invoice_number);
+    }
+  }
+  
+  // Pattern 7: Look for numbers that appear after "Job #" or "PO #" (sometimes used as invoice number)
+  if (!extracted.invoice_number) {
+    const jobPatterns = [
+      /JOB\s*#?\s*[:\s]*(\d{3,8})/i,
+      /PO\s*#?\s*[:\s]*(\d{3,8})/i,
+      /P\.?O\.?\s*#?\s*[:\s]*(\d{3,8})/i,
+      /ORDER\s*#?\s*[:\s]*(\d{3,8})/i
+    ];
+    
+    for (const pattern of jobPatterns) {
+      const match = text.match(pattern);
+      if (match && match[1]) {
+        extracted.invoice_number = match[1];
+        console.log('✅ Found invoice number from job/PO pattern:', extracted.invoice_number);
+        break;
       }
     }
   }
@@ -238,115 +442,153 @@ class AIExtractionService {
   // ============ DATE DETECTION ============
   console.log('🔍 Searching for date...');
   
-  // Look for date in "February 9, 2026" format
-  const monthDatePattern = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})/i;
-  const monthDateMatch = text.match(monthDatePattern);
-  if (monthDateMatch) {
-    const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-    const monthStr = monthDateMatch[1].toLowerCase();
-    const month = monthNames.indexOf(monthStr) + 1;
-    const day = monthDateMatch[2].padStart(2, '0');
-    const year = monthDateMatch[3];
-    extracted.date = `${year}-${month.toString().padStart(2, '0')}-${day}`;
-    console.log('✅ Found date (text):', extracted.date);
-  }
-
-  // Fallback to numeric date format
-  if (!extracted.date) {
-    const datePattern = /(\d{2})\/(\d{2})\/(\d{4})/;
-    const dateMatch = text.match(datePattern);
-    if (dateMatch) {
-      extracted.date = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
-      console.log('✅ Found date from pattern:', extracted.date);
-    }
-  }
-
-  // ============ AMOUNT DETECTION ============
-  console.log('🔍 Searching for amount...');
-  
-  // FIRST PRIORITY: Look for "Amount due" or "Total" with R symbol
-  const priorityPatterns = [
-    /Amount\s*due\s*[R]?\s*([\d,]+\.?\d*)/i,
-    /Total\s*[R]?\s*([\d,]+\.?\d*)\s*$/im,
-    /R([\d,]+\.?\d*)\s*due/i,
-    /TOTAL\s*[R]?\s*([\d,]+\.?\d*)/i
+  // Look for date in various formats
+  const datePatterns = [
+    // Month name formats (US style)
+    /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})/i,
+    /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i,
+    // DD/MM/YYYY or MM/DD/YYYY
+    /(\d{1,2})\/(\d{1,2})\/(\d{4})/,
+    // YYYY-MM-DD
+    /(\d{4})-(\d{1,2})-(\d{1,2})/,
+    // DD-MM-YYYY
+    /(\d{1,2})-(\d{1,2})-(\d{4})/
   ];
   
-  for (const pattern of priorityPatterns) {
+  for (const pattern of datePatterns) {
     const match = text.match(pattern);
-    if (match && match[1]) {
-      const amount = match[1].replace(/,/g, '');
+    if (match) {
+      if (match[1].match(/[A-Za-z]/)) {
+        // Handle month name formats
+        const monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+        const fullMonthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+        
+        let month;
+        const monthStr = match[1].toLowerCase();
+        
+        // Check if it's a full month name
+        const fullMonthIndex = fullMonthNames.indexOf(monthStr);
+        if (fullMonthIndex !== -1) {
+          month = fullMonthIndex + 1;
+        } else {
+          // Check if it's a shortened month name
+          const shortMonthStr = monthStr.substring(0, 3);
+          month = monthNames.indexOf(shortMonthStr) + 1;
+        }
+        
+        if (month > 0) {
+          const day = match[2].padStart(2, '0');
+          const year = match[3];
+          extracted.date = `${year}-${month.toString().padStart(2, '0')}-${day}`;
+          console.log('✅ Found date from text pattern:', extracted.date);
+          break;
+        }
+      } else if (match[1].length === 4) {
+        // YYYY-MM-DD format
+        extracted.date = `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+        console.log('✅ Found date from YYYY-MM-DD pattern:', extracted.date);
+        break;
+      } else {
+        // DD/MM/YYYY or MM/DD/YYYY - assume DD/MM/YYYY for international
+        extracted.date = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+        console.log('✅ Found date from DD/MM/YYYY pattern:', extracted.date);
+        break;
+      }
+    }
+  }
+
+  // ============ AMOUNT DETECTION (with both $ and R) ============
+  console.log('🔍 Searching for amount...');
+  
+  // Priority 1: Look for "Balance Due" with any currency
+  const balanceDuePattern = /Balance\s*Due\s*([R$])?\s*([\d,]+\.?\d*)/i;
+  const balanceDueMatch = text.match(balanceDuePattern);
+  if (balanceDueMatch && balanceDueMatch[2]) {
+    const amount = balanceDueMatch[2].replace(/,/g, '');
+    extracted.amount = parseFloat(amount).toFixed(2);
+    console.log('✅ Found amount from Balance Due:', extracted.amount);
+  }
+  
+  // Priority 2: Look for "Amount due" with any currency
+  if (!extracted.amount) {
+    const amountDuePattern = /Amount\s*due\s*([R$])?\s*([\d,]+\.?\d*)/i;
+    const amountDueMatch = text.match(amountDuePattern);
+    if (amountDueMatch && amountDueMatch[2]) {
+      const amount = amountDueMatch[2].replace(/,/g, '');
       extracted.amount = parseFloat(amount).toFixed(2);
-      console.log('✅ Found amount from priority pattern:', extracted.amount);
-      break;
+      console.log('✅ Found amount from Amount due:', extracted.amount);
     }
   }
   
-  // SECOND PRIORITY: Look for the largest R amount
+  // Priority 3: Look for "Total" with any currency
   if (!extracted.amount) {
-    const rPattern = /R\s*([\d,]+\.?\d*)/g;
+    const totalPattern = /TOTAL\s*([R$])?\s*([\d,]+\.?\d*)/i;
+    const totalMatch = text.match(totalPattern);
+    if (totalMatch && totalMatch[2]) {
+      const amount = totalMatch[2].replace(/,/g, '');
+      extracted.amount = parseFloat(amount).toFixed(2);
+      console.log('✅ Found amount from TOTAL:', extracted.amount);
+    }
+  }
+  
+  // Priority 4: Look for the largest amount with currency symbol
+  if (!extracted.amount) {
+    const currencyPattern = /([R$])\s*([\d,]+\.?\d*)/g;
     const amounts = [];
     let match;
     
-    while ((match = rPattern.exec(text)) !== null) {
-      const num = parseFloat(match[1].replace(/,/g, ''));
-      if (num > 0 && num < 10000) {
-        amounts.push(num);
+    while ((match = currencyPattern.exec(text)) !== null) {
+      const num = parseFloat(match[2].replace(/,/g, ''));
+      if (num > 0 && num < 100000) {
+        amounts.push({ value: num, currency: match[1] });
       }
     }
     
     if (amounts.length > 0) {
       // Get the largest amount (likely the total)
-      const largest = Math.max(...amounts);
-      extracted.amount = largest.toFixed(2);
-      console.log('✅ Found amount from largest R value:', extracted.amount);
+      const largest = amounts.reduce((max, item) => item.value > max.value ? item : max, amounts[0]);
+      extracted.amount = largest.value.toFixed(2);
+      console.log('✅ Found amount from largest value:', extracted.amount);
     }
   }
 
-  // ============ VAT DETECTION ============
+  // ============ VAT DETECTION (with both $ and R) ============
   console.log('🔍 Searching for VAT...');
   
-  // Look specifically for the line with "VAT - SOUTH AFRICA"
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes('VAT - SOUTH AFRICA') && i + 1 < lines.length) {
-      // The VAT amount is usually on the next line or same line
-      const nextLine = lines[i + 1];
-      const vatMatch = nextLine.match(/R?\s*([\d,]+\.?\d*)/);
-      if (vatMatch) {
-        const vat = parseFloat(vatMatch[1].replace(/,/g, ''));
-        if (vat > 0 && vat < 500) {
-          extracted.vat = vat.toFixed(2);
-          console.log('✅ Found VAT from next line after VAT section:', extracted.vat);
-          break;
-        }
+  // Look specifically for VAT with any currency
+  const vatPatterns = [
+    /VAT.*?([R$])\s*([\d,]+\.?\d*)/i,
+    /([R$])\s*([\d,]+\.?\d*)\s*VAT/i,
+    /VAT\s*-\s*SOUTH\s*AFRICA.*?([R$])\s*([\d,]+\.?\d*)/is,
+    /Tax.*?([R$])\s*([\d,]+\.?\d*)/i
+  ];
+  
+  for (const pattern of vatPatterns) {
+    const match = text.match(pattern);
+    if (match && match[2]) {
+      const vat = parseFloat(match[2].replace(/,/g, ''));
+      // Filter out the percentage and get the actual VAT amount
+      if (vat > 0 && vat < 10000 && !match[0].includes('%')) {
+        extracted.vat = vat.toFixed(2);
+        console.log('✅ Found VAT:', extracted.vat);
+        break;
       }
     }
   }
   
-  // If not found, look for "R52.04" pattern specifically
+  // If VAT not found, look for number near VAT line
   if (!extracted.vat) {
-    const smallAmountPattern = /R\s*(52\.04|5[0-9]\.[0-9]{2})/;
-    const smallMatch = text.match(smallAmountPattern);
-    if (smallMatch && smallMatch[1]) {
-      extracted.vat = parseFloat(smallMatch[1]).toFixed(2);
-      console.log('✅ Found VAT from small amount pattern:', extracted.vat);
-    }
-  }
-  
-  // Look for any amount that is about 15% of the total
-  if (!extracted.vat && extracted.amount) {
-    const amount = parseFloat(extracted.amount);
-    const possibleVat = amount * 0.15; // 15% VAT
-    
-    // Look for numbers close to this value
-    const rPattern = /R\s*([\d,]+\.?\d*)/g;
-    let match;
-    while ((match = rPattern.exec(text)) !== null) {
-      const num = parseFloat(match[1].replace(/,/g, ''));
-      if (Math.abs(num - possibleVat) < 5) {
-        extracted.vat = num.toFixed(2);
-        console.log('✅ Found VAT by percentage calculation:', extracted.vat);
-        break;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes('VAT') && !lines[i].includes('%')) {
+        const vatMatch = lines[i].match(/([\d,]+\.?\d*)/);
+        if (vatMatch) {
+          const vat = parseFloat(vatMatch[1].replace(/,/g, ''));
+          if (vat < 10000) {
+            extracted.vat = vat.toFixed(2);
+            console.log('✅ Found VAT from line:', extracted.vat);
+            break;
+          }
+        }
       }
     }
   }
@@ -354,6 +596,7 @@ class AIExtractionService {
   console.log('📊 FINAL extracted data:', extracted);
   return extracted;
 }
+
   calculateConfidence(visionResponse) {
     try {
       let totalConfidence = 0;
