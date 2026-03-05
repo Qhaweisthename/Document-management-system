@@ -333,9 +333,11 @@ const extractPreview = async (req, res) => {
     };
     
     let success = false;
-    
+    let isMock = false;
+
     if (result && result.success) {
       success = true;
+      isMock = result.mock === true;
       extractedData = {
         invoice_number: result.data?.invoice_number || '',
         date: result.data?.date || '',
@@ -343,14 +345,19 @@ const extractPreview = async (req, res) => {
         vat: result.data?.vat || '',
         vendor: result.data?.vendor || ''
       };
-      console.log('✅ Preview extraction successful:', extractedData);
+      if (isMock) {
+        console.log('⚠️ Preview extraction returned mock data (real extraction failed)');
+      } else {
+        console.log('✅ Preview extraction successful:', extractedData);
+      }
     } else {
       console.log('⚠️ Preview extraction failed or returned no data');
     }
-    
+
     // Always return 200 with success flag - never let the frontend crash
     return res.status(200).json({
       success: success,
+      mock: isMock,
       data: extractedData
     });
     

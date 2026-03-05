@@ -4,32 +4,32 @@ import axios from 'axios';
 import { useAuth } from '../context/authContext';
 import './Upload.css';
 
+// Matches the NOT_FOUND sentinel from the backend
+const NOT_FOUND = 'Not found';
+
+// Returns true if a field value came back as NOT_FOUND
+const isNotFound = (val) => !val || val === NOT_FOUND;
+
 export default function Upload() {
   const [file, setFile] = useState(null);
   const [vendors, setVendors] = useState([]);
-  
-  // Helper function to get today's date in YYYY-MM-DD format
+  const [extractionStatus, setExtractionStatus] = useState({}); // per-field: 'found' | 'not_found' | 'ai'
+
   const getTodaysDate = () => {
     const date = new Date();
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   };
 
   const [formData, setFormData] = useState({
     vendor_id: '',
     document_type: 'invoice',
-    date: '', // Start empty - we'll set defaults after vendors load
+    date: '',
     amount: '',
     vat: '',
     invoice_number: ''
   });
-  
-  const [newVendor, setNewVendor] = useState({
-    name: '',
-    tax_number: ''
-  });
+
+  const [newVendor, setNewVendor] = useState({ name: '', tax_number: '' });
   const [showNewVendor, setShowNewVendor] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -37,33 +37,23 @@ export default function Upload() {
   const [success, setSuccess] = useState('');
   const [extracting, setExtracting] = useState(false);
   const [localVendorId, setLocalVendorId] = useState(null);
-  const [autoCreateVendor, setAutoCreateVendor] = useState(false); // Toggle for auto-creation
-  
+  const [autoCreateVendor, setAutoCreateVendor] = useState(false);
+  const [extractionSummary, setExtractionSummary] = useState(null); // { found: [], notFound: [] }
+
   const { user } = useAuth();
   const navigate = useNavigate();
-  
-  console.log('Token exists:', !!localStorage.getItem('token'));
 
   const api = axios.create({
     baseURL: `${import.meta.env.VITE_API_URL}/api`,
-    headers: {
-      'Authorization': `Bearer ${localStorage.getItem('token')}`
-    }
+    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
   });
 
   const ensureLocalVendor = async () => {
     try {
       const localExists = vendors.some(v => v.name.toLowerCase() === 'local vendor');
-      
       if (!localExists && vendors.length > 0) {
-        console.log('🏠 Creating Local Vendor...');
-        const response = await api.post('/documents/vendors', {
-          name: 'Local Vendor',
-          tax_number: '000000000'
-        });
-        
+        const response = await api.post('/documents/vendors', { name: 'Local Vendor', tax_number: '000000000' });
         await fetchVendors();
-        console.log('✅ Local Vendor created:', response.data);
       }
     } catch (error) {
       console.error('Error ensuring Local Vendor:', error);
@@ -72,352 +62,250 @@ export default function Upload() {
 
   const fetchVendors = async () => {
     try {
-      console.log('Fetching vendors...');
       const response = await api.get('/documents/vendors');
-      console.log('Vendors fetched:', response.data);
       setVendors(response.data.vendors);
-      
-      // Find and store Local Vendor ID
-      const localVendor = response.data.vendors.find(v => 
-        v.name.toLowerCase() === 'local vendor'
-      );
-      if (localVendor) {
-        setLocalVendorId(localVendor.id);
-      }
+      const localVendor = response.data.vendors.find(v => v.name.toLowerCase() === 'local vendor');
+      if (localVendor) setLocalVendorId(localVendor.id);
     } catch (error) {
       console.error('Error fetching vendors:', error);
     }
   };
 
-  useEffect(() => {
-    fetchVendors();
-  }, []);
+  useEffect(() => { fetchVendors(); }, []);
 
-  // This effect now ONLY runs when vendors load, and sets defaults
   useEffect(() => {
     if (vendors.length > 0 && localVendorId) {
-      // Only set default vendor if NO vendor is currently selected AND we're not extracting
       if (!formData.vendor_id && !extracting) {
-        setFormData(prev => ({
-          ...prev,
-          vendor_id: localVendorId,
-          date: getTodaysDate() // Set today's date as default
-        }));
-        console.log('🏠 Default vendor set to: Local Vendor');
+        setFormData(prev => ({ ...prev, vendor_id: localVendorId, date: getTodaysDate() }));
       }
     } else if (vendors.length > 0 && !localVendorId) {
-      console.log('⚠️ Local Vendor not found, will try to create it');
       ensureLocalVendor();
     }
   }, [vendors, localVendorId, formData.vendor_id, extracting]);
 
   const generateInvoiceNumber = () => {
-    const prefix = 'INV';
     const date = new Date();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    
-    // Simple random number between 100-999
-    const random = Math.floor(Math.random() * 900 + 100);
-    
-    return `${prefix}-${year}${month}${day}-${random}`;
-  };
-
-  const handleAutoCreateVendor = async (vendorName, taxNumber = '') => {
-    try {
-      console.log('🏢 Auto-creating vendor:', vendorName);
-      const response = await api.post('/documents/vendors', {
-        name: vendorName,
-        tax_number: taxNumber || '000000000'
-      });
-      console.log('✅ Vendor auto-created:', response.data);
-      
-      // Refresh vendors list
-      await fetchVendors();
-      
-      // Select the newly created vendor
-      setFormData(prev => ({
-        ...prev,
-        vendor_id: response.data.vendor.id
-      }));
-      
-      setSuccess(`✅ Vendor "${vendorName}" auto-created and selected`);
-      setTimeout(() => setSuccess(''), 3000);
-      
-      return response.data.vendor;
-    } catch (error) {
-      console.error('Error auto-creating vendor:', error);
-      return null;
-    }
+    const yr = date.getFullYear().toString().slice(-2);
+    const mo = String(date.getMonth() + 1).padStart(2, '0');
+    const dy = String(date.getDate()).padStart(2, '0');
+    const rand = Math.floor(Math.random() * 900 + 100);
+    return `INV-${yr}${mo}${dy}-${rand}`;
   };
 
   const extractDataFromFile = async (selectedFile) => {
-  setExtracting(true);
-  setError('');
-  
-  try {
-    console.log('🔍 Attempting to extract data from file before upload...');
-    
-    const extractData = new FormData();
-    extractData.append('document', selectedFile);
-    
-    const response = await api.post('/documents/extract-preview', extractData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    });
-    
-    console.log('✅ Extraction preview response:', response.data);
-    
-    const generatedInvoiceNumber = generateInvoiceNumber();
-    
-    // Start with invoice number only
-    let updatedData = {
-      invoice_number: generatedInvoiceNumber,
-    };
-    
-    // Track extracted fields for success message
-    let extractedFields = [];
-    
-    // If we got data from AI, use it
-    if (response.data.data) {
-      const extracted = response.data.data;
-      console.log('📊 AI Extracted data:', extracted);
-      
-      // Handle invoice number
-      if (extracted.invoice_number && 
-          !extracted.invoice_number.match(/^(bill|invoice|total|amount|date)$/i) &&
-          extracted.invoice_number.length > 2) {
-        console.log('Found invoice number:', extracted.invoice_number);
-        updatedData.invoice_number = extracted.invoice_number;
-        extractedFields.push('invoice_number');
-      }
-      
-      // Handle date
-      if (extracted.date) {
-        console.log('Found date:', extracted.date);
-        // Check if it's a valid date format
-        if (extracted.date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-          updatedData.date = extracted.date;
-          extractedFields.push('date');
-        } else {
-          // Try to parse other date formats
-          const parsedDate = new Date(extracted.date);
-          if (!isNaN(parsedDate.getTime())) {
-            const year = parsedDate.getFullYear();
-            const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
-            const day = String(parsedDate.getDate()).padStart(2, '0');
-            updatedData.date = `${year}-${month}-${day}`;
-            extractedFields.push('date');
-          }
-        }
-      }
-      
-      // Handle amount
-      if (extracted.amount) {
-        const amountValue = parseFloat(extracted.amount);
-        if (!isNaN(amountValue) && amountValue > 0) {
-          console.log('Found amount:', amountValue);
-          updatedData.amount = amountValue.toString();
-          extractedFields.push('amount');
-        }
-      }
-      
-      // Handle VAT
-      if (extracted.vat) {
-        const vatValue = parseFloat(extracted.vat);
-        if (!isNaN(vatValue) && vatValue > 0) {
-          console.log('Found vat:', vatValue);
-          updatedData.vat = vatValue.toString();
-          extractedFields.push('vat');
-        }
+    setExtracting(true);
+    setError('');
+    setExtractionSummary(null);
+    setExtractionStatus({});
+
+    try {
+      const extractData = new FormData();
+      extractData.append('document', selectedFile);
+
+      const response = await api.post('/documents/extract-preview', extractData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      const generatedInvoiceNumber = generateInvoiceNumber();
+
+      // Backend signalled a hard failure (no Vision client, file unreadable, etc.)
+      if (!response.data.success) {
+        setError(`⚠️ ${response.data.reason || 'AI extraction failed.'} Please fill in the fields manually.`);
+        setExtractionSummary({ found: [], notFound: ['invoice_number', 'date', 'amount', 'vat', 'vendor', 'currency'] });
+        setExtractionStatus({
+          invoice_number: 'not_found', date: 'not_found',
+          amount: 'not_found', vat: 'not_found', vendor: 'not_found'
+        });
+        setFormData(prev => ({ ...prev, invoice_number: generatedInvoiceNumber }));
+        return;
       }
 
-      // ============ VENDOR HANDLING - NOW PRE-FILLS LIKE OTHER FIELDS ============
-      if (extracted.vendor && extracted.vendor !== 'Invoice' && extracted.vendor.length > 2) {
-        console.log('Found vendor name:', extracted.vendor);
-        
-        // Clean up vendor name
+      // Legacy: backend still returned mock data
+      if (response.data.mock) {
+        setError('⚠️ AI could not read this document. Please fill in the fields manually.');
+        setFormData(prev => ({ ...prev, invoice_number: generatedInvoiceNumber }));
+        return;
+      }
+
+      const extracted = response.data.data || {};
+      console.log('📊 AI Extracted:', extracted);
+
+      let updatedData = { invoice_number: generatedInvoiceNumber };
+      const found = [];
+      const notFound = [];
+      const statusMap = {};
+
+      // ── Invoice number ──────────────────────
+      if (!isNotFound(extracted.invoice_number) &&
+          !extracted.invoice_number.match(/^(bill|invoice|total|amount|date)$/i) &&
+          extracted.invoice_number.length > 2) {
+        updatedData.invoice_number = extracted.invoice_number;
+        found.push('Invoice #');
+        statusMap.invoice_number = 'ai';
+      } else {
+        notFound.push('Invoice #');
+        statusMap.invoice_number = 'not_found';
+      }
+
+      // ── Date ────────────────────────────────
+      if (!isNotFound(extracted.date)) {
+        if (extracted.date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          updatedData.date = extracted.date;
+          found.push('Date');
+          statusMap.date = 'ai';
+        } else {
+          const parsed = new Date(extracted.date);
+          if (!isNaN(parsed.getTime())) {
+            updatedData.date = parsed.toISOString().split('T')[0];
+            found.push('Date');
+            statusMap.date = 'ai';
+          } else {
+            notFound.push('Date');
+            statusMap.date = 'not_found';
+          }
+        }
+      } else {
+        notFound.push('Date');
+        statusMap.date = 'not_found';
+      }
+
+      // ── Amount ──────────────────────────────
+      if (!isNotFound(extracted.amount)) {
+        const amountValue = parseFloat(extracted.amount);
+        if (!isNaN(amountValue) && amountValue > 0) {
+          updatedData.amount = amountValue.toString();
+          found.push('Amount');
+          statusMap.amount = 'ai';
+        } else {
+          notFound.push('Amount');
+          statusMap.amount = 'not_found';
+        }
+      } else {
+        notFound.push('Amount');
+        statusMap.amount = 'not_found';
+      }
+
+      // ── VAT ─────────────────────────────────
+      if (!isNotFound(extracted.vat)) {
+        const vatValue = parseFloat(extracted.vat);
+        if (!isNaN(vatValue) && vatValue > 0) {
+          updatedData.vat = vatValue.toString();
+          found.push('VAT');
+          statusMap.vat = 'ai';
+        } else {
+          notFound.push('VAT');
+          statusMap.vat = 'not_found';
+        }
+      } else {
+        notFound.push('VAT');
+        statusMap.vat = 'not_found';
+      }
+
+      // ── Vendor ──────────────────────────────
+      if (!isNotFound(extracted.vendor) && extracted.vendor !== 'Invoice' && extracted.vendor.length > 2) {
         const cleanVendorName = extracted.vendor.replace(/\s+/g, ' ').trim();
-        
-        // Try to find matching vendor in existing list
-        const matchedVendor = vendors.find(v => 
+        const matchedVendor = vendors.find(v =>
           v.name.toLowerCase().includes(cleanVendorName.toLowerCase()) ||
           cleanVendorName.toLowerCase().includes(v.name.toLowerCase())
         );
-        
+
         if (matchedVendor) {
-          console.log('✅ Found matching vendor in database:', matchedVendor.name);
           updatedData.vendor_id = matchedVendor.id;
-          extractedFields.push('vendor');
-        } else {
-          console.log('⚠️ Vendor not found in database, pre-filling as text');
-          // Instead of trying to set vendor_id (which requires an ID),
-          // we'll set the vendor name in a separate field and show a message
-          
-          // Store the extracted vendor name in a temporary state
-          // You can either:
-          // Option 1: Auto-create the vendor
-          if (autoCreateVendor) {
-            console.log('🤖 Auto-creating vendor:', cleanVendorName);
-            try {
-              const createResponse = await api.post('/documents/vendors', {
-                name: cleanVendorName,
-                tax_number: extracted.vat || '000000000'
-              });
-              console.log('✅ Vendor auto-created:', createResponse.data);
-              
-              // Refresh vendors list
-              await fetchVendors();
-              
-              // Select the newly created vendor
-              updatedData.vendor_id = createResponse.data.vendor.id;
-              extractedFields.push('vendor (auto-created)');
-            } catch (createError) {
-              console.error('❌ Failed to auto-create vendor:', createError);
-              // Pre-fill the new vendor form as fallback
-              setNewVendor(prev => ({
-                ...prev,
-                name: cleanVendorName,
-                tax_number: extracted.vat || ''
-              }));
-              setShowNewVendor(true);
-            }
-          } else {
-            // Option 2: Pre-fill the new vendor form
-            setNewVendor(prev => ({
-              ...prev,
+          found.push('Vendor');
+          statusMap.vendor = 'ai';
+        } else if (autoCreateVendor) {
+          try {
+            const createResponse = await api.post('/documents/vendors', {
               name: cleanVendorName,
-              tax_number: extracted.vat || ''
-            }));
-            
-            // Show a success message that vendor is ready to be created
-            setSuccess(`📋 Vendor "${cleanVendorName}" ready - Complete creation in popup`);
-            
-            // Automatically open the new vendor modal
+              tax_number: extracted.vat || '000000000'
+            });
+            await fetchVendors();
+            updatedData.vendor_id = createResponse.data.vendor.id;
+            found.push('Vendor (auto-created)');
+            statusMap.vendor = 'ai';
+          } catch {
+            setNewVendor({ name: cleanVendorName, tax_number: extracted.vat || '' });
             setShowNewVendor(true);
+            notFound.push('Vendor');
+            statusMap.vendor = 'not_found';
           }
+        } else {
+          setNewVendor({ name: cleanVendorName, tax_number: extracted.vat || '' });
+          setShowNewVendor(true);
+          notFound.push('Vendor');
+          statusMap.vendor = 'not_found';
         }
+      } else {
+        notFound.push('Vendor');
+        statusMap.vendor = 'not_found';
       }
+
+      setFormData(prev => ({ ...prev, ...updatedData }));
+      setExtractionStatus(statusMap);
+      setExtractionSummary({ found, notFound });
+
+    } catch (error) {
+      console.error('❌ Extraction preview failed:', error);
+      const generatedInvoiceNumber = generateInvoiceNumber();
+      setFormData(prev => ({ ...prev, invoice_number: generatedInvoiceNumber }));
+      setError('AI extraction request failed. Please fill in the fields manually.');
+      setExtractionStatus({
+        invoice_number: 'not_found', date: 'not_found',
+        amount: 'not_found', vat: 'not_found', vendor: 'not_found'
+      });
+      setExtractionSummary({ found: [], notFound: ['Invoice #', 'Date', 'Amount', 'VAT', 'Vendor'] });
+    } finally {
+      setExtracting(false);
     }
-    
-    // Update form with all data
-    console.log('Updating form with:', updatedData);
-    setFormData(prev => ({
-      ...prev,
-      ...updatedData
-    }));
-    
-    // Show success message
-    if (extractedFields.length > 0) {
-      setSuccess(`✅ AI extracted: ${extractedFields.join(', ')}`);
-    } else {
-      setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated`);
-    }
-    
-  } catch (error) {
-    console.error('❌ Extraction preview failed:', error);
-    const generatedInvoiceNumber = generateInvoiceNumber();
-    setFormData(prev => ({
-      ...prev,
-      invoice_number: generatedInvoiceNumber
-    }));
-    setSuccess(`✅ Invoice #${generatedInvoiceNumber} generated`);
-  } finally {
-    setExtracting(false);
-  }
-};
+  };
 
   const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0];
-    if (selectedFile) {
-      console.log('File selected:', {
-        name: selectedFile.name,
-        size: selectedFile.size,
-        type: selectedFile.type
-      });
-      
-      if (selectedFile.size > 10 * 1024 * 1024) {
-        setError('File size must be less than 10MB');
-        return;
-      }
-      
-      const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
-      if (!allowedTypes.includes(selectedFile.type)) {
-        setError('Only PDF, JPEG, and PNG files are allowed');
-        return;
-      }
-      
-      setFile(selectedFile);
-      setError('');
-      
-      const tempInvoiceNumber = generateInvoiceNumber();
-      setFormData(prev => ({
-        ...prev,
-        invoice_number: tempInvoiceNumber
-      }));
-      
-      await extractDataFromFile(selectedFile);
-    }
+    if (!selectedFile) return;
+
+    if (selectedFile.size > 10 * 1024 * 1024) { setError('File size must be less than 10MB'); return; }
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
+    if (!allowedTypes.includes(selectedFile.type)) { setError('Only PDF, JPEG, and PNG files are allowed'); return; }
+
+    setFile(selectedFile);
+    setError('');
+    setFormData(prev => ({ ...prev, invoice_number: generateInvoiceNumber() }));
+    await extractDataFromFile(selectedFile);
   };
 
   const handleInputChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+    // Mark manually edited fields as 'found' (user-provided)
+    setExtractionStatus(prev => ({ ...prev, [e.target.name]: 'found' }));
   };
 
-  const handleNewVendorChange = (e) => {
-    setNewVendor({
-      ...newVendor,
-      [e.target.name]: e.target.value
-    });
-  };
+  const handleNewVendorChange = (e) => setNewVendor({ ...newVendor, [e.target.name]: e.target.value });
 
   const handleCreateVendor = async (e) => {
     e.preventDefault();
     try {
-      console.log('Creating vendor:', newVendor);
       const response = await api.post('/documents/vendors', newVendor);
-      console.log('Vendor created:', response.data);
       setVendors([...vendors, response.data.vendor]);
       setFormData({ ...formData, vendor_id: response.data.vendor.id });
+      setExtractionStatus(prev => ({ ...prev, vendor_id: 'found' }));
       setShowNewVendor(false);
       setNewVendor({ name: '', tax_number: '' });
       setSuccess('Vendor created successfully!');
       setTimeout(() => setSuccess(''), 3000);
     } catch (error) {
-      console.error('Error creating vendor:', error);
       setError(error.response?.data?.message || 'Error creating vendor');
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    if (!file) {
-      setError('Please select a file');
-      return;
-    }
+    if (!file) { setError('Please select a file'); return; }
 
-    // Ensure amount and vat have default values (0) if empty
     const submitData = {
       ...formData,
       amount: formData.amount === '' ? '0' : formData.amount,
       vat: formData.vat === '' ? '0' : formData.vat
     };
-
-    console.log('Submitting form with data:', {
-      vendor_id: submitData.vendor_id,
-      document_type: submitData.document_type,
-      date: submitData.date,
-      amount: submitData.amount,
-      vat: submitData.vat,
-      invoice_number: submitData.invoice_number,
-      file: file.name
-    });
 
     setUploading(true);
     setError('');
@@ -425,56 +313,46 @@ export default function Upload() {
 
     const data = new FormData();
     data.append('document', file);
-    data.append('vendor_id', submitData.vendor_id);
-    data.append('document_type', submitData.document_type);
-    data.append('date', submitData.date);
-    data.append('amount', submitData.amount);
-    data.append('vat', submitData.vat);
-    data.append('invoice_number', submitData.invoice_number);
+    Object.entries(submitData).forEach(([k, v]) => data.append(k, v));
 
     try {
-      console.log('Sending upload request to:', '/documents/upload');
-      
-      const response = await api.post('/documents/upload', data, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round(
-            (progressEvent.loaded * 100) / progressEvent.total
-          );
-          setUploadProgress(percentCompleted);
-        }
+      await api.post('/documents/upload', data, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (e) => setUploadProgress(Math.round((e.loaded * 100) / e.total))
       });
 
-      console.log('Upload successful:', response.data);
       setSuccess('Document uploaded successfully!');
       setUploadProgress(0);
-      
       setFile(null);
-      setFormData({
-        vendor_id: '',
-        document_type: 'invoice',
-        date: '',
-        amount: '',
-        vat: '',
-        invoice_number: ''
-      });
-      
+      setExtractionSummary(null);
+      setExtractionStatus({});
+      setFormData({ vendor_id: '', document_type: 'invoice', date: '', amount: '', vat: '', invoice_number: '' });
       document.getElementById('file-input').value = '';
-      
-      setTimeout(() => {
-        setSuccess('');
-        navigate('/documents');
-      }, 2000);
-      
+
+      setTimeout(() => { setSuccess(''); navigate('/documents'); }, 2000);
     } catch (error) {
-      console.error('Upload error details:', error.response?.data || error.message);
-      const errorMessage = error.response?.data?.message || 'Error uploading document';
-      setError(errorMessage);
+      setError(error.response?.data?.message || 'Error uploading document');
     } finally {
       setUploading(false);
     }
+  };
+
+  // ── Field status badge helper ─────────────
+  const FieldBadge = ({ field }) => {
+    const status = extractionStatus[field];
+    if (!status || extracting) return null;
+    if (status === 'ai') return <span className="badge badge--ai">✦ AI</span>;
+    if (status === 'not_found') return <span className="badge badge--missing">Not found</span>;
+    if (status === 'found') return <span className="badge badge--manual">Edited</span>;
+    return null;
+  };
+
+  const fieldClass = (field) => {
+    const status = extractionStatus[field];
+    if (!status || extracting) return '';
+    if (status === 'ai') return 'field--ai';
+    if (status === 'not_found') return 'field--missing';
+    return '';
   };
 
   return (
@@ -484,11 +362,7 @@ export default function Upload() {
         <p>Upload invoices and credit notes for processing</p>
         <div className="vendor-auto-create-option">
           <label>
-            <input
-              type="checkbox"
-              checked={autoCreateVendor}
-              onChange={(e) => setAutoCreateVendor(e.target.checked)}
-            />
+            <input type="checkbox" checked={autoCreateVendor} onChange={(e) => setAutoCreateVendor(e.target.checked)} />
             Auto-create new vendors
           </label>
         </div>
@@ -497,7 +371,45 @@ export default function Upload() {
       {error && <div className="upload-error">{error}</div>}
       {success && <div className="upload-success">{success}</div>}
 
+      {/* ── Extraction summary banner ── */}
+      {extractionSummary && !extracting && (
+        <div className="extraction-summary">
+          <div className="extraction-summary__header">
+            <span className="extraction-summary__icon">🤖</span>
+            <strong>AI Extraction Complete</strong>
+          </div>
+          <div className="extraction-summary__body">
+            {extractionSummary.found.length > 0 && (
+              <div className="extraction-summary__group extraction-summary__group--found">
+                <span className="extraction-summary__label">✅ Found</span>
+                <span className="extraction-summary__pills">
+                  {extractionSummary.found.map(f => (
+                    <span key={f} className="pill pill--found">{f}</span>
+                  ))}
+                </span>
+              </div>
+            )}
+            {extractionSummary.notFound.length > 0 && (
+              <div className="extraction-summary__group extraction-summary__group--missing">
+                <span className="extraction-summary__label">⚠️ Not found</span>
+                <span className="extraction-summary__pills">
+                  {extractionSummary.notFound.map(f => (
+                    <span key={f} className="pill pill--missing">{f}</span>
+                  ))}
+                </span>
+              </div>
+            )}
+          </div>
+          {extractionSummary.notFound.length > 0 && (
+            <p className="extraction-summary__hint">
+              Fields marked <em>"Not found"</em> could not be read from the document — please fill them in manually.
+            </p>
+          )}
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="upload-form">
+        {/* ── File drop zone ── */}
         <div className="form-section">
           <h3>Document File</h3>
           <div className="file-upload-area">
@@ -512,27 +424,38 @@ export default function Upload() {
             <label htmlFor="file-input" className="file-label">
               <span className="file-icon">📄</span>
               <span className="file-text">
-                {extracting ? '🔍 AI analyzing document...' : (file ? file.name : 'Choose a file or drag it here')}
+                {extracting ? '🔍 AI analyzing document…' : (file ? file.name : 'Choose a file or drag it here')}
               </span>
               <span className="file-info">
-                {extracting ? 'Please wait...' : 'Max size: 10MB (PDF, JPEG, PNG)'}
+                {extracting ? 'Please wait…' : 'Max size: 10MB (PDF, JPEG, PNG)'}
               </span>
             </label>
           </div>
           {extracting && (
             <div className="extracting-indicator">
               <div className="extracting-spinner"></div>
-              <span>AI is extracting data from document...</span>
+              <span>AI is extracting data from document…</span>
             </div>
           )}
         </div>
 
+        {/* ── Document details ── */}
         <div className="form-section">
-          <h3>Document Details {extracting && <span className="badge">✨ AI Auto-filling</span>}</h3>
-          
+          <h3>
+            Document Details
+            {extracting && <span className="badge badge--ai">✨ AI Auto-filling</span>}
+          </h3>
+
           <div className="form-row">
-            <div className="form-group">
-              <label>Vendor *</label>
+            {/* Vendor */}
+            <div className={`form-group ${fieldClass('vendor_id')}`}>
+              <label>
+                Vendor *
+                <FieldBadge field="vendor_id" />
+                {extractionStatus.vendor_id === 'not_found' && (
+                  <span className="field-hint">Not found — select or create one</span>
+                )}
+              </label>
               <div className="vendor-select">
                 <select
                   name="vendor_id"
@@ -542,32 +465,20 @@ export default function Upload() {
                   disabled={extracting}
                 >
                   <option value="">Select Vendor</option>
-                  {vendors.map(vendor => (
-                    <option key={vendor.id} value={vendor.id}>
-                      {vendor.name}
-                    </option>
+                  {vendors.map(v => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
                   ))}
                 </select>
-                <button 
-                  type="button" 
-                  onClick={() => setShowNewVendor(true)}
-                  className="btn-secondary"
-                  disabled={extracting}
-                >
+                <button type="button" onClick={() => setShowNewVendor(true)} className="btn-secondary" disabled={extracting}>
                   + New
                 </button>
               </div>
             </div>
 
+            {/* Document type */}
             <div className="form-group">
               <label>Document Type *</label>
-              <select
-                name="document_type"
-                value={formData.document_type}
-                onChange={handleInputChange}
-                required
-                disabled={extracting}
-              >
+              <select name="document_type" value={formData.document_type} onChange={handleInputChange} required disabled={extracting}>
                 <option value="invoice">Invoice</option>
                 <option value="credit_note">Credit Note</option>
               </select>
@@ -575,8 +486,15 @@ export default function Upload() {
           </div>
 
           <div className="form-row">
-            <div className="form-group">
-              <label>Invoice Number *</label>
+            {/* Invoice number */}
+            <div className={`form-group ${fieldClass('invoice_number')}`}>
+              <label>
+                Invoice Number *
+                <FieldBadge field="invoice_number" />
+                {extractionStatus.invoice_number === 'not_found' && (
+                  <span className="field-hint">Not found — auto-generated below</span>
+                )}
+              </label>
               <input
                 type="text"
                 name="invoice_number"
@@ -585,13 +503,18 @@ export default function Upload() {
                 placeholder="e.g., INV-2024-001"
                 required
                 disabled={extracting}
-                className={formData.invoice_number && !extracting ? 'auto-filled' : ''}
               />
-              {formData.invoice_number && !extracting && <span className="auto-fill-badge">Auto</span>}
             </div>
 
-            <div className="form-group">
-              <label>Date *</label>
+            {/* Date */}
+            <div className={`form-group ${fieldClass('date')}`}>
+              <label>
+                Date *
+                <FieldBadge field="date" />
+                {extractionStatus.date === 'not_found' && (
+                  <span className="field-hint">Not found — please enter manually</span>
+                )}
+              </label>
               <input
                 type="date"
                 name="date"
@@ -599,17 +522,20 @@ export default function Upload() {
                 onChange={handleInputChange}
                 required
                 disabled={extracting}
-                className={formData.date && !extracting ? 'auto-filled' : ''}
               />
-              {formData.date && !extracting && <span className="auto-fill-badge">{
-                formData.date !== getTodaysDate() ? 'AI' : 'Today'
-              }</span>}
             </div>
           </div>
 
           <div className="form-row">
-            <div className="form-group">
-              <label>Amount</label>
+            {/* Amount */}
+            <div className={`form-group ${fieldClass('amount')}`}>
+              <label>
+                Amount
+                <FieldBadge field="amount" />
+                {extractionStatus.amount === 'not_found' && (
+                  <span className="field-hint">Not found — enter manually</span>
+                )}
+              </label>
               <input
                 type="number"
                 name="amount"
@@ -619,13 +545,18 @@ export default function Upload() {
                 step="0.01"
                 min="0"
                 disabled={extracting}
-                className={formData.amount && !extracting ? 'auto-filled' : ''}
               />
-              {formData.amount && !extracting && <span className="auto-fill-badge">AI</span>}
             </div>
 
-            <div className="form-group">
-              <label>VAT</label>
+            {/* VAT */}
+            <div className={`form-group ${fieldClass('vat')}`}>
+              <label>
+                VAT
+                <FieldBadge field="vat" />
+                {extractionStatus.vat === 'not_found' && (
+                  <span className="field-hint">Not found — enter manually</span>
+                )}
+              </label>
               <input
                 type="number"
                 name="vat"
@@ -635,31 +566,22 @@ export default function Upload() {
                 step="0.01"
                 min="0"
                 disabled={extracting}
-                className={formData.vat && !extracting ? 'auto-filled' : ''}
               />
-              {formData.vat && !extracting && <span className="auto-fill-badge">AI</span>}
             </div>
           </div>
         </div>
 
         <div className="form-actions">
-          <button 
-            type="submit" 
-            className="btn-primary"
-            disabled={uploading || extracting}
-          >
+          <button type="submit" className="btn-primary" disabled={uploading || extracting}>
             {uploading ? (
               <span>
-                Uploading... {uploadProgress}%
+                Uploading… {uploadProgress}%
                 <div className="progress-bar">
-                  <div 
-                    className="progress-fill" 
-                    style={{ width: `${uploadProgress}%` }}
-                  />
+                  <div className="progress-fill" style={{ width: `${uploadProgress}%` }} />
                 </div>
               </span>
             ) : extracting ? (
-              <span>🔍 AI Analyzing...</span>
+              <span>🔍 AI Analyzing…</span>
             ) : (
               'Upload Document'
             )}
@@ -667,6 +589,7 @@ export default function Upload() {
         </div>
       </form>
 
+      {/* ── New vendor modal ── */}
       {showNewVendor && (
         <div className="modal-overlay">
           <div className="modal-content">
@@ -674,34 +597,15 @@ export default function Upload() {
             <form onSubmit={handleCreateVendor}>
               <div className="form-group">
                 <label>Vendor Name *</label>
-                <input
-                  type="text"
-                  name="name"
-                  value={newVendor.name}
-                  onChange={handleNewVendorChange}
-                  placeholder="Enter vendor name"
-                  required
-                />
+                <input type="text" name="name" value={newVendor.name} onChange={handleNewVendorChange} placeholder="Enter vendor name" required />
               </div>
               <div className="form-group">
                 <label>Tax Number</label>
-                <input
-                  type="text"
-                  name="tax_number"
-                  value={newVendor.tax_number}
-                  onChange={handleNewVendorChange}
-                  placeholder="Enter tax number (optional)"
-                />
+                <input type="text" name="tax_number" value={newVendor.tax_number} onChange={handleNewVendorChange} placeholder="Enter tax number (optional)" />
               </div>
               <div className="modal-actions">
                 <button type="submit" className="btn-primary">Create</button>
-                <button 
-                  type="button" 
-                  onClick={() => setShowNewVendor(false)}
-                  className="btn-secondary"
-                >
-                  Cancel
-                </button>
+                <button type="button" onClick={() => setShowNewVendor(false)} className="btn-secondary">Cancel</button>
               </div>
             </form>
           </div>
