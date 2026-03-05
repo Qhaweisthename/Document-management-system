@@ -2,18 +2,14 @@ const vision = require('@google-cloud/vision');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
-const pdf = require('pdf-poppler');
-const os = require('os');
 
 // ─────────────────────────────────────────────
 // NOT_FOUND SENTINEL
-// Shown in the UI whenever a field could not be extracted.
 // ─────────────────────────────────────────────
 const NOT_FOUND = 'Not found';
 
 // ─────────────────────────────────────────────
 // MULTI-CURRENCY CONFIG
-// Add or remove currencies here as needed.
 // ─────────────────────────────────────────────
 const CURRENCY_MAP = {
   'R':   'ZAR',
@@ -105,46 +101,13 @@ class AIExtractionService {
     }
   }
 
-  // ── PDF → image buffer ────────────────────
-  async convertPDFToImage(pdfPath) {
-    const tempDir = path.join(os.tmpdir(), `pdf-imgs-${Date.now()}`);
-    try {
-      console.log('🔄 Converting PDF to image…');
-      fs.mkdirSync(tempDir, { recursive: true });
-
-      await pdf.convert(pdfPath, {
-        format: 'png',
-        out_dir: tempDir,
-        out_prefix: 'page',
-        page: 1,
-        resolution: 300   // High DPI for better OCR accuracy
-      });
-
-      const files = fs.readdirSync(tempDir);
-      const imageFile = files.find(f => /\.png$/i.test(f));
-      if (!imageFile) throw new Error('No PNG generated from PDF');
-
-      const buffer = fs.readFileSync(path.join(tempDir, imageFile));
-      console.log('✅ PDF → PNG:', imageFile, `(${buffer.length} bytes)`);
-      return buffer;
-
-    } catch (err) {
-      console.error('❌ PDF conversion error:', err.message);
-      return null;
-    } finally {
-      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (_) {}
-    }
-  }
-
   // ── Main entry point ──────────────────────
   async extractFromDocument(filePath, documentId) {
-    // ── Client not initialised ───────────────
     if (!this.client || this.useMock) {
-      console.warn('⚠️  Vision client not ready – returning empty extraction');
+      console.warn('⚠️  Vision client not ready');
       return this._unavailableResult('Google Vision client is not initialised. Please check your credentials.');
     }
 
-    // ── File missing ─────────────────────────
     if (!fs.existsSync(filePath)) {
       console.warn('📁 File not found:', filePath);
       return this._unavailableResult(`File not found: ${filePath}`);
@@ -160,54 +123,129 @@ class AIExtractionService {
   }
 
   // ── Real Vision extraction ────────────────
-  async _realExtraction(filePath, documentId) {
-    try {
-      let imageBuffer;
-      const isPDF = /\.pdf$/i.test(filePath);
+  // ── Real Vision extraction ────────────────
+// ── Real Vision extraction ────────────────
+async _realExtraction(filePath, documentId) {
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    const fileSizeMB = (fileBuffer.length / (1024 * 1024)).toFixed(2);
+    const isPDF = /\.pdf$/i.test(filePath);
+    
+    console.log(`📦 File size: ${fileSizeMB} MB (${isPDF ? 'PDF' : 'Image'})`);
 
-      if (isPDF) {
-        imageBuffer = await this.convertPDFToImage(filePath);
-        if (!imageBuffer) {
-          return this._unavailableResult('PDF could not be converted to image for OCR processing.');
-        }
-      } else {
-        imageBuffer = fs.readFileSync(filePath);
+    let fullText = '';
+    let visionResult = null;
+    let confidence = 0.9;
+
+    if (isPDF) {
+      // ─────────────────────────────────────────────────────────────────
+      // FIXED: PDFs - use correct batchAnnotateFiles syntax
+      // ─────────────────────────────────────────────────────────────────
+      console.log('📑 Processing PDF with batchAnnotateFiles...');
+      
+      // Convert PDF to base64
+      const base64Content = fileBuffer.toString('base64');
+      
+      // Create the request in the correct format
+      const request = {
+        requests: [{
+          inputConfig: {
+            mimeType: 'application/pdf',
+            content: base64Content
+          },
+          features: [{
+            type: 'DOCUMENT_TEXT_DETECTION'
+          }],
+          pages: [1, 2, 3, 4, 5] // Process first 5 pages
+        }]
+      };
+      
+      // Make the API call
+      const [result] = await this.client.batchAnnotateFiles(request);
+      
+      // Extract responses correctly
+      const responses = result?.responses?.[0]?.responses || [];
+      
+      if (responses.length === 0) {
+        console.log('⚠️ No responses from Vision API');
+        return this._unavailableResult('No text could be extracted from the PDF');
       }
-
+      
+      // Combine text from all pages
+      fullText = responses
+        .map(r => r?.fullTextAnnotation?.text || '')
+        .filter(t => t.length > 0)
+        .join('\n');
+      
+      // Calculate average confidence
+      let totalConfidence = 0;
+      let wordCount = 0;
+      
+      for (const pageRes of responses) {
+        for (const page of pageRes?.fullTextAnnotation?.pages || []) {
+          for (const block of page.blocks || []) {
+            for (const para of block.paragraphs || []) {
+              for (const word of para.words || []) {
+                totalConfidence += word.confidence || 0;
+                wordCount++;
+              }
+            }
+          }
+        }
+      }
+      confidence = wordCount > 0 ? totalConfidence / wordCount : 0.9;
+      
+      console.log(`📄 Extracted ${responses.length} page(s) from PDF`);
+      
+    } else {
+      // ─────────────────────────────────────────────────────────────────
+      // Images (JPG / PNG): use documentTextDetection as before
+      // ─────────────────────────────────────────────────────────────────
+      console.log('🖼️  Image detected — using documentTextDetection…');
+      
       const [result] = await this.client.documentTextDetection({
-        image: { content: imageBuffer.toString('base64') }
+        image: { content: fileBuffer.toString('base64') }
       });
 
-      const fullText = result?.fullTextAnnotation?.text;
-
-      if (!fullText || fullText.trim().length === 0) {
-        console.warn('⚠️  No text detected in document');
-        return this._unavailableResult('No readable text was detected in this document.');
-      }
-
-      console.log('✅ Vision returned text, length:', fullText.length);
-      console.log('📄 Preview:', fullText.substring(0, 300).replace(/\n/g, ' '));
-
-      const extractedData = this.parseExtractedText(fullText);
-      const confidence    = this.calculateConfidence(result);
-
-      if (documentId) {
-        await this.storeExtractionResults(documentId, extractedData, confidence, result.fullTextAnnotation);
-      }
-
-      return {
-        success: true,
-        data: extractedData,
-        confidence,
-        text: fullText,
-        real: true
-      };
-
-    } catch (err) {
-      console.error('❌ Vision API error:', err.message);
-      return this._unavailableResult(`Vision API error: ${err.message}`);
+      visionResult = result;
+      fullText = result?.fullTextAnnotation?.text || '';
+      confidence = this.calculateConfidence(result);
     }
+
+    if (!fullText || fullText.trim().length === 0) {
+      console.warn('⚠️  No text detected in document');
+      return this._unavailableResult('No readable text was detected in this document.');
+    }
+
+    console.log('✅ Vision text length:', fullText.length);
+    console.log('📄 Preview:', fullText.substring(0, 300).replace(/\n/g, ' '));
+
+    const extractedData = this.parseExtractedText(fullText);
+
+    if (documentId) {
+      await this.storeExtractionResults(documentId, extractedData, confidence, visionResult?.fullTextAnnotation || null);
+    }
+
+    return {
+      success: true,
+      data: extractedData,
+      confidence,
+      text: fullText,
+      real: true
+    };
+
+  } catch (err) {
+    console.error('❌ Vision API error:', err.message);
+    console.error('❌ Stack:', err.stack);
+    
+    // More detailed error logging
+    if (err.code === 3) {
+      console.error('❌ This usually means the PDF is corrupted or password protected');
+    }
+    
+    return this._unavailableResult(`Vision API error: ${err.message}`);
   }
+}
 
   // ── Builds a clean "nothing found" response ─
   _unavailableResult(reason) {
@@ -230,16 +268,16 @@ class AIExtractionService {
 
   // ── Core parser ───────────────────────────
   parseExtractedText(text) {
+    const lines = this._toLines(text);
     const raw = {
-      invoice_number: this._extractInvoiceNumber(text, this._toLines(text)),
+      invoice_number: this._extractInvoiceNumber(text, lines),
       date:           this._extractDate(text),
-      amount:         this._extractAmount(text, this._toLines(text)),
-      vat:            this._extractVat(text, this._toLines(text)),
-      vendor:         this._extractVendor(this._toLines(text)),
+      amount:         this._extractAmount(text, lines),
+      vat:            this._extractVat(text, lines),
+      vendor:         this._extractVendor(lines),
       currency:       detectCurrency(text),
     };
 
-    // Replace every null with the NOT_FOUND sentinel
     const extracted = {};
     for (const [key, val] of Object.entries(raw)) {
       extracted[key] = (val !== null && val !== undefined && val !== '') ? val : NOT_FOUND;
@@ -358,7 +396,7 @@ class AIExtractionService {
       /(?:invoice\s+)?date\s*[:\-]?\s*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})/i
     );
     if (labelMatch) {
-      const parsed = this._parseRawDate(labelMatch[1], MONTHS, SHORT_MONTHS);
+      const parsed = this._parseRawDate(labelMatch[1], MONTHS);
       if (parsed) { console.log('✅ Date (label):', parsed); return parsed; }
     }
 
